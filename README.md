@@ -42,11 +42,12 @@ npm start
 
 Copy `backend/.env` and fill in:
 ```env
-MONGO_URL=mongodb://localhost:27017
+MONGO_URL=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/
 DB_NAME=auctionpro
-JWT_SECRET=your-strong-random-secret
-STRIPE_API_KEY=sk_test_...
-CORS_ORIGINS=http://localhost:3000
+JWT_SECRET=your-strong-random-secret-min-32-chars
+RAZORPAY_KEY_ID=rzp_live_...
+RAZORPAY_KEY_SECRET=your_razorpay_secret
+CORS_ORIGINS=https://yourdomain.com
 ```
 
 ## Deploy
