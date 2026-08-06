@@ -1,0 +1,9 @@
+{
+  "short_name": "AuctionPro",
+  "name": "AuctionPro - Live Sports Player Auction Platform",
+  "icons": [],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0a0a0f",
+  "background_color": "#0a0a0f"
+}
