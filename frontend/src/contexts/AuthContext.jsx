@@ -1,47 +1,106 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import axios from 'axios';
+/**
+ * AuthContext.jsx — Global authentication state
+ *
+ * Provides login/logout functionality and the current user object
+ * to every component in the app via React Context.
+ *
+ * Usage:
+ *   const { user, login, logout, isLoading } = useAuth();
+ */
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
-const API = `${BACKEND_URL}/api`;
-const AuthCtx = createContext(null);
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { api } from '../lib/api';
+import { disconnectSocket } from '../lib/socket';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Context definition
+// ─────────────────────────────────────────────────────────────────────────────
+const AuthContext = createContext(null);
+
+/** Key names used in localStorage */
+const TOKEN_KEY = 'ap_token';
+const USER_KEY  = 'ap_user';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Provider Component
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * AuthProvider wraps the entire app and manages auth state.
+ * Place it at the root of your component tree (in App.js or index.js).
+ */
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => localStorage.getItem('ap_token'));
-  const [loading, setLoading] = useState(true);
+  const [user, setUser]           = useState(null);
+  const [isLoading, setIsLoading] = useState(true);  // true while checking stored token
 
+  // On app load — restore session from localStorage
   useEffect(() => {
-    if (!token) { setLoading(false); return; }
-    axios.get(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => setUser(r.data.user))
-      .catch(() => { localStorage.removeItem('ap_token'); setToken(null); })
-      .finally(() => setLoading(false));
-  }, [token]);
+    const restoreSession = async () => {
+      const storedToken = localStorage.getItem(TOKEN_KEY);
+      const storedUser  = localStorage.getItem(USER_KEY);
 
-  const login = useCallback(async (email, password) => {
-    const { data } = await axios.post(`${API}/auth/login`, { email, password });
-    localStorage.setItem('ap_token', data.token);
-    setToken(data.token); setUser(data.user);
-    return data.user;
+      if (storedToken && storedUser) {
+        try {
+          // Verify token is still valid by calling /auth/me
+          const { data: freshUser } = await api.get('/auth/me');
+          setUser(freshUser);
+        } catch {
+          // Token expired or invalid — clear stored data
+          clearAuthData();
+        }
+      }
+
+      setIsLoading(false);
+    };
+
+    restoreSession();
   }, []);
 
-  const register = useCallback(async (payload) => {
-    const { data } = await axios.post(`${API}/auth/register`, payload);
-    localStorage.setItem('ap_token', data.token);
-    setToken(data.token); setUser(data.user);
-    return data.user;
+  /** Save auth data and update state after a successful login/register */
+  const login = useCallback((token, userData) => {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(userData));
+    setUser(userData);
   }, []);
 
+  /** Clear auth data and disconnect socket on logout */
   const logout = useCallback(() => {
-    localStorage.removeItem('ap_token');
-    setToken(null); setUser(null);
+    clearAuthData();
+    disconnectSocket();
+    setUser(null);
+    window.location.href = '/login';
   }, []);
 
   return (
-    <AuthCtx.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, isLoading }}>
       {children}
-    </AuthCtx.Provider>
+    </AuthContext.Provider>
   );
 }
 
-export const useAuth = () => useContext(AuthCtx);
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom Hook
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useAuth — access authentication state anywhere in the component tree.
+ *
+ * @returns {{ user: object|null, login: Function, logout: Function, isLoading: boolean }}
+ * @throws {Error} If used outside of <AuthProvider>
+ */
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used inside an <AuthProvider>');
+  }
+  return context;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function clearAuthData() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
