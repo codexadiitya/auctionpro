@@ -18,6 +18,8 @@ Version : 2.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 # Standard Library Imports
 # ─────────────────────────────────────────────────────────────────────────────
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -32,8 +34,8 @@ from typing import Any, Dict, List, Optional
 # ─────────────────────────────────────────────────────────────────────────────
 import bcrypt
 import jwt as pyjwt
+import razorpay
 import socketio
-import stripe
 from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
@@ -78,9 +80,16 @@ UPLOAD_DIR      = Path(os.environ.get("UPLOAD_DIR", "uploads"))
 MAX_UPLOAD_SIZE = 5 * 1024 * 1024   # 5 MB limit
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
-# Stripe — optional, leave blank to disable payments
-stripe.api_key          = os.environ.get("STRIPE_API_KEY", "")
-STRIPE_WEBHOOK_SECRET   = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+# Razorpay — get your keys from https://dashboard.razorpay.com/app/keys
+RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+# Build Razorpay client (only if keys are configured)
+razorpay_client = (
+    razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET
+    else None
+)
 
 # CORS — restrict to your frontend domain in production
 CORS_ORIGINS = [
@@ -367,11 +376,28 @@ class ContactCreate(BaseModel):
 
 
 class CheckoutCreate(BaseModel):
-    """Data to create a Stripe checkout session."""
+    """
+    Data to create a Razorpay payment order.
+
+    Flow:
+        1. Frontend sends this to POST /checkout
+        2. Backend creates a Razorpay order and returns order_id + key_id
+        3. Frontend opens the Razorpay checkout modal
+        4. User pays → Razorpay calls frontend callback
+        5. Frontend sends payment_id + signature to POST /payment/verify
+        6. Backend verifies signature and marks payment as complete
+    """
     package_name: str
-    amount:       float   # Amount in INR (paisa will be computed server-side)
-    success_url:  str
-    cancel_url:   str
+    amount:       float   # Amount in INR (Razorpay will receive it in paisa)
+
+
+class PaymentVerify(BaseModel):
+    """Data sent from frontend after user completes Razorpay payment."""
+    razorpay_order_id:   str
+    razorpay_payment_id: str
+    razorpay_signature:  str
+    package_name:        str
+    amount:              float
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -949,84 +975,112 @@ async def upload_image(
 # ═════════════════════════════════════════════════════════════════════════════
 
 @api_router.post("/checkout", tags=["Payments"])
-async def create_checkout_session(
+async def create_razorpay_order(
     body: CheckoutCreate,
     current_user: Dict = Depends(get_current_user),
 ):
     """
-    Create a Stripe Checkout session for purchasing an auction package.
+    Step 1 of Razorpay payment flow — create a payment order.
 
-    Returns a URL to redirect the user to for payment.
+    The frontend receives the order_id and key_id, then opens
+    the Razorpay checkout modal for the user to pay.
+
+    Returns:
+        order_id    : Razorpay order ID (pass to frontend modal)
+        key_id      : Razorpay public key (safe to expose to frontend)
+        amount      : Amount in paisa (for Razorpay modal)
+        currency    : Always 'INR'
+        package_name: Name of the package being purchased
     """
-    if not stripe.api_key:
+    if not razorpay_client:
         raise HTTPException(
             status_code=503,
-            detail="Payment processing is not configured. Contact the administrator.",
+            detail="Payment processing is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to your .env file.",
         )
+
+    amount_in_paisa = int(body.amount * 100)  # Razorpay requires amount in paisa
 
     try:
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency":     "inr",
-                    "product_data": {"name": body.package_name},
-                    "unit_amount":  int(body.amount * 100),  # Convert to paisa
-                },
-                "quantity": 1,
-            }],
-            mode="payment",
-            success_url=body.success_url,
-            cancel_url=body.cancel_url,
-            metadata={
-                "user_id":      current_user["id"],
+        order = razorpay_client.order.create({
+            "amount":   amount_in_paisa,
+            "currency": "INR",
+            "receipt":  f"order_{uuid.uuid4().hex[:10]}",
+            "notes": {
                 "package_name": body.package_name,
+                "user_id":      current_user["id"],
+                "user_email":   current_user["email"],
             },
+        })
+    except Exception as err:
+        logger.error(f"Razorpay order creation failed: {err}")
+        raise HTTPException(status_code=400, detail=f"Payment order creation failed: {err}")
+
+    return {
+        "order_id":     order["id"],
+        "key_id":       RAZORPAY_KEY_ID,   # Public key — safe to send to frontend
+        "amount":       amount_in_paisa,
+        "currency":     "INR",
+        "package_name": body.package_name,
+    }
+
+
+@api_router.post("/payment/verify", tags=["Payments"])
+async def verify_razorpay_payment(
+    body: PaymentVerify,
+    current_user: Dict = Depends(get_current_user),
+):
+    """
+    Step 2 of Razorpay payment flow — verify payment signature.
+
+    After the user pays in the Razorpay modal, Razorpay sends:
+        - razorpay_order_id
+        - razorpay_payment_id
+        - razorpay_signature  (HMAC-SHA256 of order_id|payment_id)
+
+    We verify the signature using our secret key before recording the payment.
+    This prevents anyone from faking a successful payment.
+
+    Returns:
+        success: True if payment is verified and recorded.
+
+    Raises:
+        400: If the signature is invalid (possible fraud attempt).
+    """
+    if not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Payment verification is not configured")
+
+    # Build the expected signature using HMAC-SHA256
+    expected_signature = hmac.new(
+        RAZORPAY_KEY_SECRET.encode(),
+        f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Compare signatures (constant-time comparison prevents timing attacks)
+    if not hmac.compare_digest(expected_signature, body.razorpay_signature):
+        logger.warning(
+            f"Invalid Razorpay signature from user {current_user['id']} "
+            f"for order {body.razorpay_order_id}"
         )
-        return {"checkout_url": session.url, "session_id": session.id}
-    except stripe.error.StripeError as err:
-        raise HTTPException(status_code=400, detail=str(err))
+        raise HTTPException(status_code=400, detail="Payment verification failed. Invalid signature.")
 
+    # Signature is valid — save the payment record
+    payment_record = {
+        "id":             str(uuid.uuid4()),
+        "order_id":       body.razorpay_order_id,
+        "payment_id":     body.razorpay_payment_id,
+        "user_id":        current_user["id"],
+        "coordinator_id": current_user["id"],
+        "package_name":   body.package_name,
+        "amount":         body.amount,
+        "currency":       "INR",
+        "payment_status": "paid",
+        "created_at":     utc_now().isoformat(),
+    }
+    await db.payments.insert_one(payment_record)
+    logger.info(f"Payment verified and recorded: {body.razorpay_payment_id}")
 
-@api_router.post("/webhook/stripe", tags=["Payments"])
-async def stripe_webhook(request: Request):
-    """
-    Handle Stripe webhook events.
-    Called by Stripe when a payment is completed.
-    Verifies the webhook signature to prevent spoofing.
-    """
-    payload   = await request.body()
-    signature = request.headers.get("stripe-signature", "")
-
-    if STRIPE_WEBHOOK_SECRET:
-        try:
-            event = stripe.Webhook.construct_event(payload, signature, STRIPE_WEBHOOK_SECRET)
-        except stripe.error.SignatureVerificationError:
-            raise HTTPException(status_code=400, detail="Invalid webhook signature")
-    else:
-        # No webhook secret configured — accept without verification (dev only)
-        event = json.loads(payload)
-
-    # Handle successful payments
-    if event["type"] == "checkout.session.completed":
-        session  = event["data"]["object"]
-        metadata = session.get("metadata", {})
-
-        payment_record = {
-            "id":             str(uuid.uuid4()),
-            "session_id":     session["id"],
-            "user_id":        metadata.get("user_id"),
-            "coordinator_id": metadata.get("user_id"),
-            "package_name":   metadata.get("package_name", "Unknown"),
-            "amount":         session["amount_total"] / 100,  # Convert from paisa
-            "currency":       session["currency"],
-            "payment_status": "paid",
-            "created_at":     utc_now().isoformat(),
-        }
-        await db.payments.insert_one(payment_record)
-        logger.info(f"Payment recorded: {payment_record['session_id']}")
-
-    return {"received": True}
+    return {"success": True, "payment_id": body.razorpay_payment_id}
 
 
 @api_router.get("/payments", tags=["Payments"])

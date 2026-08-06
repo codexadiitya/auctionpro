@@ -271,20 +271,197 @@ function PlayersPage() {
   );
 }
 
+/**
+ * PaymentsPage — Razorpay payment integration
+ *
+ * Flow:
+ *   1. User clicks "Buy" on a package card
+ *   2. We call POST /api/checkout to create a Razorpay order (backend)
+ *   3. We open the Razorpay checkout modal using their JS SDK
+ *   4. User pays inside the modal
+ *   5. We call POST /api/payment/verify to confirm with the backend
+ *   6. Payment is saved and shown in the transaction history table
+ */
+
+/** Dynamically load the Razorpay checkout script from their CDN */
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (document.getElementById('razorpay-script')) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.id  = 'razorpay-script';
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload  = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
+/** Available pricing packages */
+const PACKAGES = [
+  { id: 'starter',    name: 'Starter',    price: 999,   auctions: 1,  teams: 4,  features: ['1 Auction', 'Up to 4 Teams', '50 Players'] },
+  { id: 'pro',        name: 'Pro',         price: 2999,  auctions: 5,  teams: 12, features: ['5 Auctions', 'Up to 12 Teams', '200 Players', 'Analytics'] },
+  { id: 'enterprise', name: 'Enterprise',  price: 7999,  auctions: 20, teams: 20, features: ['20 Auctions', 'Unlimited Teams', 'Custom Branding'] },
+  { id: 'tournament', name: 'Tournament',  price: 14999, auctions: -1, teams: -1, features: ['Unlimited Everything', 'White Label', 'API Access'] },
+];
+
 function PaymentsPage() {
-  const [rows, setRows] = useState([]);
-  useEffect(()=>{ api.get('/payments').then(r=>setRows(r.data)).catch(()=>{ /* no payments yet */ }); }, []);
+  const { user }      = useAuth();
+  const { toast }     = useToast();
+  const [history, setHistory]       = useState([]);
+  const [purchasing, setPurchasing] = useState(null);   // ID of package being purchased
+
+  // Load existing payment history on mount
+  useEffect(() => {
+    api.get('/payments')
+      .then(r => setHistory(r.data))
+      .catch(() => { /* No payments yet — show empty state */ });
+  }, []);
+
+  /**
+   * Handle the full Razorpay payment flow for a chosen package.
+   * @param {Object} pkg - The package object with name and price
+   */
+  const handleBuy = async (pkg) => {
+    setPurchasing(pkg.id);
+
+    try {
+      // Step 1: Load the Razorpay JS SDK
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        toast({ title: 'Could not load payment gateway', description: 'Check your internet connection.', variant: 'destructive' });
+        return;
+      }
+
+      // Step 2: Create a Razorpay order on the backend
+      const { data: orderData } = await api.post('/checkout', {
+        package_name: pkg.name,
+        amount:       pkg.price,
+      });
+
+      // Step 3: Open the Razorpay checkout modal
+      const razorpay = new window.Razorpay({
+        key:         orderData.key_id,
+        amount:      orderData.amount,
+        currency:    orderData.currency,
+        order_id:    orderData.order_id,
+        name:        'AuctionPro',
+        description: `${pkg.name} Package`,
+        prefill: {
+          name:  user?.name  || '',
+          email: user?.email || '',
+        },
+        theme: { color: '#F97316' },  // Orange brand color
+
+        // Step 4: Called by Razorpay after successful payment
+        handler: async (response) => {
+          try {
+            // Step 5: Verify the payment signature on the backend
+            await api.post('/payment/verify', {
+              razorpay_order_id:   response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature:  response.razorpay_signature,
+              package_name:        pkg.name,
+              amount:              pkg.price,
+            });
+
+            // Step 6: Show success and refresh payment history
+            toast({ title: `✅ Payment successful! ${pkg.name} package activated.` });
+            const refreshed = await api.get('/payments');
+            setHistory(refreshed.data);
+          } catch {
+            toast({ title: 'Payment verification failed', description: 'Contact support with your payment ID.', variant: 'destructive' });
+          }
+        },
+
+        modal: {
+          ondismiss: () => {
+            toast({ title: 'Payment cancelled', variant: 'destructive' });
+          },
+        },
+      });
+
+      razorpay.open();
+
+    } catch (err) {
+      toast({
+        title:       'Payment failed',
+        description: err?.response?.data?.detail || 'Please try again.',
+        variant:     'destructive',
+      });
+    } finally {
+      setPurchasing(null);
+    }
+  };
+
   return (
     <div>
       <h1 className="font-display text-4xl text-white">PAYMENTS</h1>
-      <p className="text-white/60 mt-1">Stripe transaction history for your account.</p>
-      <Card className="mt-6 bg-white/[0.03] border border-white/10 overflow-hidden">
+      <p className="text-white/60 mt-1">Choose a package to unlock more auctions and features.</p>
+
+      {/* ── Pricing Cards ── */}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
+        {PACKAGES.map(pkg => (
+          <Card key={pkg.id} className="bg-white/[0.03] border border-white/10 p-5 rounded-2xl flex flex-col">
+            <div className="text-orange-400 text-xs uppercase tracking-widest font-semibold">{pkg.name}</div>
+            <div className="font-display text-4xl text-white mt-2">₹{pkg.price.toLocaleString('en-IN')}</div>
+            <div className="text-white/40 text-xs mt-1">one-time</div>
+            <ul className="mt-4 space-y-1.5 flex-1">
+              {pkg.features.map(f => (
+                <li key={f} className="text-white/70 text-sm flex items-center gap-2">
+                  <span className="text-orange-400">✓</span> {f}
+                </li>
+              ))}
+            </ul>
+            <Button
+              data-testid={`buy-${pkg.id}`}
+              onClick={() => handleBuy(pkg)}
+              disabled={purchasing === pkg.id}
+              className="mt-5 bg-gradient-to-r from-orange-500 to-amber-500 text-white w-full"
+            >
+              {purchasing === pkg.id
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Processing...</>
+                : 'Buy Now'}
+            </Button>
+          </Card>
+        ))}
+      </div>
+
+      {/* ── Transaction History ── */}
+      <h2 className="font-display text-2xl text-white mt-10 mb-3">TRANSACTION <span className="brand-gradient-text">HISTORY</span></h2>
+      <Card className="bg-white/[0.03] border border-white/10 overflow-hidden">
         <table className="w-full text-sm">
-          <thead><tr className="bg-white/5 text-white/60"><th className="text-left p-3">Package</th><th className="text-left p-3">Amount</th><th className="text-left p-3">Status</th><th className="text-left p-3">Date</th></tr></thead>
+          <thead>
+            <tr className="bg-white/5 text-white/60">
+              <th className="text-left p-3">Package</th>
+              <th className="text-left p-3">Amount</th>
+              <th className="text-left p-3">Payment ID</th>
+              <th className="text-left p-3">Status</th>
+              <th className="text-left p-3">Date</th>
+            </tr>
+          </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={4} className="p-6 text-center text-white/50">No transactions yet.</td></tr>}
-            {rows.map(r => (
-              <tr key={r.session_id} className="border-t border-white/5"><td className="p-3 text-white">{r.package_name}</td><td className="p-3 text-orange-400">₹{Number(r.amount).toLocaleString('en-IN')}</td><td className="p-3">{r.payment_status==='paid'?<Badge className="bg-green-500/20 text-green-400 border-green-500/30">Paid</Badge>:<Badge className="bg-white/10 text-white/70">{r.payment_status}</Badge>}</td><td className="p-3 text-white/50">{new Date(r.created_at).toLocaleString()}</td></tr>
+            {history.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-8 text-center text-white/40">
+                  No transactions yet. Purchase a package above to get started.
+                </td>
+              </tr>
+            )}
+            {history.map(row => (
+              <tr key={row.id} className="border-t border-white/5">
+                <td className="p-3 text-white">{row.package_name}</td>
+                <td className="p-3 text-orange-400">₹{Number(row.amount).toLocaleString('en-IN')}</td>
+                <td className="p-3 text-white/50 font-mono text-xs">{row.payment_id || '—'}</td>
+                <td className="p-3">
+                  {row.payment_status === 'paid'
+                    ? <Badge className="bg-green-500/20 text-green-400 border-green-500/30">Paid</Badge>
+                    : <Badge className="bg-white/10 text-white/70">{row.payment_status}</Badge>}
+                </td>
+                <td className="p-3 text-white/50">{new Date(row.created_at).toLocaleString()}</td>
+              </tr>
             ))}
           </tbody>
         </table>
