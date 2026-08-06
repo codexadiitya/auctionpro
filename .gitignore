@@ -4,8 +4,9 @@ backend/__pycache__/
 backend/*.pyc
 backend/uploads/
 
-# Node
-frontend/node_modules/
+# Node — exclude at ANY depth
+node_modules/
+*/node_modules/
 frontend/build/
 frontend/.env.local
 
