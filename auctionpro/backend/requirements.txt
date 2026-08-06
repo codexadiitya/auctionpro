@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+motor
+pydantic[email]
+python-dotenv
+# emergentintegrations package is installed from the proxy index:
+# pip install emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
