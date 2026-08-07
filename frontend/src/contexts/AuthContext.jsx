@@ -56,11 +56,22 @@ export function AuthProvider({ children }) {
     restoreSession();
   }, []);
 
-  /** Save auth data and update state after a successful login/register */
-  const login = useCallback((token, userData) => {
-    localStorage.setItem(TOKEN_KEY, token);
-    localStorage.setItem(USER_KEY, JSON.stringify(userData));
-    setUser(userData);
+  /** Save auth data and update state after a successful login */
+  const login = useCallback(async (email, password) => {
+    const { data } = await api.post('/auth/login', { email, password });
+    localStorage.setItem(TOKEN_KEY, data.token);
+    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    setUser(data.user);
+    return data.user;
+  }, []);
+
+  /** Register user via API call, store session token, and update state */
+  const register = useCallback(async (formData) => {
+    const { data } = await api.post('/auth/register', formData);
+    localStorage.setItem(TOKEN_KEY, data.token);
+    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    setUser(data.user);
+    return data.user;
   }, []);
 
   /** Clear auth data and disconnect socket on logout */
@@ -72,7 +83,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, login, register, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
