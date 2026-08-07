@@ -109,9 +109,14 @@ app.use((req, res, next) => {
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '2mb' }));
 
-// ── MongoDB Connection ──
-mongoose.connect(MONGO_URL)
-  .then(() => console.log('✅ Connected to MongoDB Atlas (MERN Stack)'))
+// ── MongoDB Atlas Hardened Connection ──
+mongoose.connect(MONGO_URL, {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+  family: 4
+})
+  .then(() => console.log('✅ Connected to MongoDB Atlas (MERN Stack Hardened)'))
   .catch((err) => console.error('⚠️ MongoDB Connection Warning:', err.message));
 
 // ── Mongoose User Schema ──
