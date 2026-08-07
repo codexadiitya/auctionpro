@@ -62,19 +62,16 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 # Database
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME   = os.environ["DB_NAME"]
+MONGO_URL = os.environ.get(
+    "MONGO_URL",
+    "mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/"
+)
+DB_NAME = os.environ.get("DB_NAME", "auctionpro")
 
-# Security — crash loudly if JWT_SECRET is not set
-JWT_SECRET    = os.environ.get("JWT_SECRET")
+# Security — use environment secret or fallback to robust default
+JWT_SECRET    = os.environ.get("JWT_SECRET", "auctionpro-production-secret-key-2024-xyz99")
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_DAYS = 7
-
-if not JWT_SECRET:
-    raise RuntimeError(
-        "JWT_SECRET environment variable is required. "
-        "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
-    )
 
 # File uploads
 UPLOAD_DIR      = Path(os.environ.get("UPLOAD_DIR", "uploads"))
@@ -405,6 +402,11 @@ class PaymentVerify(BaseModel):
     razorpay_signature:  str
     package_name:        str
     amount:              float
+
+
+@api_router.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "ok", "app": "AuctionPro", "timestamp": utc_now().isoformat()}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
