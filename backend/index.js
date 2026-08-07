@@ -39,6 +39,9 @@ const userSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ['coordinator', 'player'], default: 'coordinator' },
   phone: { type: String, default: '' },
+  mfaEnabled: { type: Boolean, default: false },
+  otpCode: { type: String, default: null },
+  otpExpires: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -145,6 +148,16 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
+// ── RBAC Role Middleware Factory ──
+const requireRole = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ detail: `Access denied. Requires ${allowedRoles.join(' or ')} role.` });
+    }
+    next();
+  };
+};
+
 // ── API ROUTES ──
 
 // Health Check Endpoint
@@ -218,8 +231,50 @@ app.post('/api/auth/login', async (req, res) => {
 
 // MERN Auth: Get Current User Profile (/api/auth/me)
 app.get('/api/auth/me', authMiddleware, (req, res) => {
-  const userPublic = { id: req.user._id.toString(), name: req.user.name, email: req.user.email, role: req.user.role, phone: req.user.phone };
+  const userPublic = { id: req.user._id.toString(), name: req.user.name, email: req.user.email, role: req.user.role, phone: req.user.phone, mfaEnabled: req.user.mfaEnabled };
   res.json(userPublic);
+});
+
+// MFA 2FA OTP Code Generation Endpoint
+app.post('/api/auth/mfa/generate', authMiddleware, async (req, res) => {
+  try {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    req.user.otpCode = otp;
+    req.user.otpExpires = expires;
+    await req.user.save();
+
+    console.log(`[MFA 2FA] Verification OTP for ${req.user.email}: ${otp}`);
+    res.json({ message: '2FA OTP verification code generated', otp_preview: otp });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// MFA 2FA OTP Code Verification Endpoint
+app.post('/api/auth/mfa/verify', authMiddleware, async (req, res) => {
+  try {
+    const { otp } = req.body;
+    if (!req.user.otpCode || !req.user.otpExpires) {
+      return res.status(400).json({ detail: 'No active OTP verification session. Please request a new code.' });
+    }
+    if (new Date() > new Date(req.user.otpExpires)) {
+      return res.status(400).json({ detail: 'OTP verification code has expired. Please request a new code.' });
+    }
+    if (req.user.otpCode !== otp) {
+      return res.status(400).json({ detail: 'Invalid 6-digit OTP verification code.' });
+    }
+
+    req.user.mfaEnabled = true;
+    req.user.otpCode = null;
+    req.user.otpExpires = null;
+    await req.user.save();
+
+    res.json({ status: 'success', message: 'Multi-Factor Authentication (MFA/2FA) successfully enabled!' });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
 });
 
 // Auction Routes
@@ -243,7 +298,7 @@ app.get('/api/auctions', async (req, res) => {
   }
 });
 
-app.post('/api/auctions', authMiddleware, async (req, res) => {
+app.post('/api/auctions', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
     const { name, sport, date, base_price, max_teams, budget_per_team, description } = req.body;
     const auction = new Auction({
@@ -270,6 +325,24 @@ app.post('/api/auctions', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     res.status(400).json({ detail: err.message });
+  }
+});
+
+// Resource Ownership Check: Delete Auction (Only creator coordinator can delete)
+app.delete('/api/auctions/:id', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  try {
+    const auction = await Auction.findById(req.params.id);
+    if (!auction) return res.status(404).json({ detail: 'Auction not found' });
+
+    // Strict Authorization check: Never trust client-side claims
+    if (auction.coordinatorId !== req.user._id.toString()) {
+      return res.status(403).json({ detail: 'Access Denied. You can only manage/delete auctions created by your account.' });
+    }
+
+    await Auction.findByIdAndDelete(req.params.id);
+    res.json({ status: 'success', message: 'Auction deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
   }
 });
 
