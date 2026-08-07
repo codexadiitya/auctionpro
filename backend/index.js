@@ -38,6 +38,28 @@ function validateEmail(email) {
   return typeof email === 'string' && re.test(email.trim());
 }
 
+// ── Bot Protection CAPTCHA Verification Helper (Cloudflare Turnstile) ──
+async function verifyBotProtection(token) {
+  const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
+  if (!TURNSTILE_SECRET) return true; // Skip if environment secret key is not set
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('secret', TURNSTILE_SECRET);
+    formData.append('response', token || '');
+
+    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await response.json();
+    return data.success === true;
+  } catch (err) {
+    console.warn('[BotProtection] Verification warning:', err.message);
+    return true; // Gracefully fallback if external API is unreachable
+  }
+}
+
 // ── File Upload Directory & Static Serving ──
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {

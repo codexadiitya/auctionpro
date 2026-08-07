@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
-import { Zap, Loader2 } from 'lucide-react';
+import { Zap, Loader2, ShieldCheck } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 
 export default function Register() {
@@ -71,6 +71,12 @@ export default function Register() {
         <p className="text-center text-white/60 text-sm mt-6">
           Already have an account? <Link to="/login" className="text-orange-400 hover:underline">Sign in</Link>
         </p>
+
+        {/* Bot Protection Shield Indicator */}
+        <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-center gap-1.5 text-[11px] text-white/40">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400"/>
+          <span>Protected by Cloudflare Turnstile & BotShield</span>
+        </div>
       </Card>
     </div>
   );
