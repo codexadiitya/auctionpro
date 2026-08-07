@@ -6,7 +6,7 @@ import { stats } from '../mock';
 
 export default function Hero() {
   return (
-    <section className="relative overflow-hidden pt-16 pb-24 lg:pt-24 lg:pb-32">
+    <section className="relative overflow-hidden pt-12 pb-20 lg:pt-20 lg:pb-28">
       <div className="absolute inset-0 grid-bg opacity-40" />
       <div className="absolute -top-40 -right-40 w-[500px] h-[500px] rounded-full bg-orange-600/20 blur-[120px]" />
       <div className="absolute -bottom-40 -left-40 w-[500px] h-[500px] rounded-full bg-amber-600/20 blur-[120px]" />
@@ -63,24 +63,30 @@ export default function Hero() {
               className="w-full h-full object-cover"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-[#0a0a0f] via-transparent to-transparent"/>
-            <div className="absolute bottom-4 left-4 right-4 bg-black/60 backdrop-blur-lg border border-white/10 rounded-2xl p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-white/60 text-xs uppercase tracking-wider">Live Now</div>
-                  <div className="text-white font-semibold">Siddhivinayak League Auction</div>
-                </div>
-                <div className="flex items-center gap-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-full px-3 py-1 text-xs font-semibold">
-                  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> LIVE
-                </div>
+            
+            {/* Live Indicator Card */}
+            <div className="absolute top-4 left-4 right-4 bg-black/60 backdrop-blur-lg border border-white/10 rounded-2xl p-4 flex items-center justify-between">
+              <div>
+                <div className="text-white/60 text-xs uppercase tracking-wider">Live Now</div>
+                <div className="text-white font-semibold text-sm">Premier League Auction</div>
+              </div>
+              <div className="flex items-center gap-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-full px-3 py-1 text-xs font-semibold">
+                <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> LIVE
               </div>
             </div>
-            <div className="absolute top-4 right-4 bg-orange-500 text-white text-xs font-bold uppercase tracking-widest px-3 py-1.5 rounded-full shadow-lg">Sold ₹12L</div>
-          </div>
 
-          <div className="absolute -bottom-6 -left-6 hidden sm:block bg-gradient-to-br from-orange-500 to-amber-500 rounded-2xl p-5 shadow-2xl w-56">
-            <div className="flex items-center gap-2 text-white/90 text-xs uppercase font-bold tracking-widest"><Phone className="w-3 h-3"/> Book a Call</div>
-            <div className="text-white text-lg font-semibold mt-1">Speak to an expert</div>
-            <div className="text-white/90 text-sm mt-1">Free 15-min consultation</div>
+            {/* Cleaned Up Glassmorphic Consultation Card inside hero image */}
+            <div className="absolute bottom-4 left-4 right-4 bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-2xl p-4 flex items-center justify-between shadow-2xl">
+              <div>
+                <div className="flex items-center gap-1.5 text-orange-400 text-[11px] font-bold uppercase tracking-widest">
+                  <Phone className="w-3.5 h-3.5"/> Speak to an expert
+                </div>
+                <div className="text-white text-xs text-white/70 mt-0.5">Free 15-min consultation</div>
+              </div>
+              <a href="#contact" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl transition shadow">
+                Book Call
+              </a>
+            </div>
           </div>
         </div>
       </div>
