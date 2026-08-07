@@ -25,7 +25,15 @@ export default function Login() {
       if (from) nav(from);
       else nav(u.role === 'coordinator' ? '/dashboard' : '/player/profile');
     } catch (err) {
-      toast({ title: 'Login failed', description: err?.response?.data?.detail || 'Invalid credentials', variant: 'destructive' });
+      // Log the full error so we can see network / CORS / server details
+      console.error('Login error:', err);
+
+      const serverDetail = err?.response?.data?.detail;
+      const status = err?.response?.status;
+      const message = serverDetail || err?.message || JSON.stringify(err);
+      const description = status ? `(${status}) ${message}` : message;
+
+      toast({ title: 'Login failed', description, variant: 'destructive' });
     } finally { setLoading(false); }
   };
 
@@ -51,7 +59,7 @@ export default function Login() {
             <Input data-testid="login-password" required type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})}
               placeholder="••••••••" className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-orange-500"/>
           </div>
-          <Button data-testid="login-submit" disabled={loading} className="w-full h-11 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold">
+          <Button data-testid="login-submit" disabled={loading} className="w-full h-11 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold rounded-md">
             {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Signing in...</> : 'Sign In'}
           </Button>
         </form>
