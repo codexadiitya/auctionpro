@@ -15,7 +15,7 @@ import axios from 'axios';
 // ─────────────────────────────────────────────────────────────────────────────
 // Base URL — reads from .env, falls back to localhost for local development
 // ─────────────────────────────────────────────────────────────────────────────
-export const BACKEND = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+export const BACKEND = process.env.REACT_APP_BACKEND_URL || process.env.REACT_APP_API_URL || 'https://auctionpro-backend-production.up.railway.app';
 
 /**
  * Pre-configured Axios instance with:
