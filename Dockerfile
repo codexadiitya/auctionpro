@@ -13,8 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend application source
 COPY backend/ ./
 
-ENV PORT=8000
 EXPOSE 8000
 
-# Start uvicorn server on 0.0.0.0:8000
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start uvicorn server binding dynamically to $PORT assigned by cloud platform
+CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}"]
