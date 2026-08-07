@@ -56,25 +56,6 @@ export default function Login() {
           </Button>
         </form>
 
-        <div className="relative my-6 flex items-center justify-center">
-          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/10"></div></div>
-          <span className="relative bg-[#0d0e19] px-3 text-xs text-white/40 uppercase tracking-widest font-semibold">Or Quick Demo Login</span>
-        </div>
-
-        <div className="space-y-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={async () => {
-              const u = await login('coordinator@auctionpro.com', 'demo123');
-              nav('/dashboard');
-            }}
-            className="w-full h-10 border-white/10 bg-white/5 hover:bg-white/10 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2"
-          >
-            ⚡ Instant Login as Coordinator
-          </Button>
-        </div>
-
         <p className="text-center text-white/60 text-sm mt-6">
           Don't have an account? <Link to="/register" className="text-orange-400 font-semibold hover:underline">Sign up</Link>
         </p>
