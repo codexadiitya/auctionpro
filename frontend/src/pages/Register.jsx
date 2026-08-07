@@ -23,7 +23,9 @@ export default function Register() {
       toast({ title: 'Account created!', description: `Welcome ${u.name}` });
       nav(u.role === 'coordinator' ? '/dashboard' : '/player/profile');
     } catch (err) {
-      toast({ title: 'Registration failed', description: err?.response?.data?.detail || 'Try again', variant: 'destructive' });
+      console.error('[Register Error]', err);
+      const msg = err?.response?.data?.detail || err?.message || 'Server connection failed';
+      toast({ title: 'Registration failed', description: msg, variant: 'destructive' });
     } finally { setLoading(false); }
   };
 

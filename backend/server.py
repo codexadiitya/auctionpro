@@ -35,8 +35,12 @@ from typing import Any, Dict, List, Optional
 import certifi
 import bcrypt
 import jwt as pyjwt
-import razorpay
 import socketio
+
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
 from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
@@ -82,10 +86,10 @@ ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
-# Build Razorpay client (only if keys are configured)
+# Build Razorpay client (only if keys are configured and module exists)
 razorpay_client = (
     razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-    if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET
+    if (razorpay and RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
     else None
 )
 
