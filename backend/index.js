@@ -1,0 +1,382 @@
+/**
+ * AuctionPro — MERN Stack Node.js Express Backend Server
+ * ========================================================
+ * Real-time Sports Player Auction Platform Backend (Node.js + Express + MongoDB)
+ */
+
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const http = require('http');
+const { Server } = require('socket.io');
+require('dotenv').config();
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }
+});
+
+const PORT = process.env.PORT || 8000;
+const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
+const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-production-mern-secret-2024';
+
+// ── Middleware ──
+app.use(cors({ origin: '*' }));
+app.use(express.json());
+
+// ── MongoDB Connection ──
+mongoose.connect(MONGO_URL)
+  .then(() => console.log('✅ Connected to MongoDB Atlas (MERN Stack)'))
+  .catch((err) => console.error('⚠️ MongoDB Connection Warning:', err.message));
+
+// ── Mongoose User Schema ──
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true },
+  passwordHash: { type: String, required: true },
+  role: { type: String, enum: ['coordinator', 'player'], default: 'coordinator' },
+  phone: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const User = mongoose.model('User', userSchema);
+
+// ── Mongoose Auction Schema ──
+const auctionSchema = new mongoose.Schema({
+  coordinatorId: { type: String, required: true },
+  name: { type: String, required: true },
+  sport: { type: String, default: 'Cricket' },
+  date: { type: String, required: true },
+  basePrice: { type: Number, default: 100000 },
+  maxTeams: { type: Number, default: 8 },
+  budgetPerTeam: { type: Number, default: 5000000 },
+  description: { type: String, default: '' },
+  status: { type: String, default: 'upcoming' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Auction = mongoose.model('Auction', auctionSchema);
+
+// ── Mongoose Player Schema ──
+const playerSchema = new mongoose.Schema({
+  auctionId: { type: String, required: true },
+  name: { type: String, required: true },
+  role: { type: String, default: 'Batsman' },
+  sport: { type: String, default: 'Cricket' },
+  basePrice: { type: Number, default: 100000 },
+  city: { type: String, default: '' },
+  phone: { type: String, default: '' },
+  jerseyNumber: { type: Number, default: 1 },
+  battingStyle: { type: String, default: 'Right Hand Batsman' },
+  bowlingStyle: { type: String, default: 'Right Arm Medium' },
+  age: { type: Number, default: 21 },
+  lotNumber: { type: Number, default: 1 },
+  bio: { type: String, default: '' },
+  photoUrl: { type: String, default: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop' },
+  status: { type: String, default: 'registered' }, // registered | sold | unsold
+  soldToTeamId: { type: String, default: null },
+  soldPrice: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Player = mongoose.model('Player', playerSchema);
+
+// ── Mongoose Team Schema ──
+const teamSchema = new mongoose.Schema({
+  auctionId: { type: String, required: true },
+  name: { type: String, required: true },
+  ownerName: { type: String, required: true },
+  color: { type: String, default: '#FF6B00' },
+  purse: { type: Number, default: 5000000 },
+  spent: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Team = mongoose.model('Team', teamSchema);
+
+// ── JWT Helper Middleware ──
+const authMiddleware = async (req, res, next) => {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) {
+    return res.status(401).json({ detail: 'Authorization header required' });
+  }
+  const token = header.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.id).select('-passwordHash');
+    if (!user) return res.status(401).json({ detail: 'User not found' });
+    req.user = user;
+    next();
+  } catch (err) {
+    return res.status(401).json({ detail: 'Invalid or expired session token' });
+  }
+};
+
+// ── API ROUTES ──
+
+// Health Check Endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', stack: 'MERN (Node.js + Express + MongoDB)', timestamp: new Date().toISOString() });
+});
+
+// MERN Auth: Register User
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password, role, phone } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({ detail: 'Name, email, and password are required' });
+    }
+
+    const existing = await User.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      return res.status(400).json({ detail: 'An account with this email already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const user = new User({
+      name,
+      email: email.toLowerCase(),
+      passwordHash,
+      role: role || 'coordinator',
+      phone: phone || ''
+    });
+
+    await user.save();
+
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const userPublic = { id: user._id.toString(), name: user.name, email: user.email, role: user.role, phone: user.phone };
+
+    res.json({ token, user: userPublic });
+  } catch (err) {
+    console.error('MERN Register Error:', err);
+    res.status(500).json({ detail: 'Registration error: ' + err.message });
+  }
+});
+
+// MERN Auth: Login User
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ detail: 'Email and password are required' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(401).json({ detail: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ detail: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const userPublic = { id: user._id.toString(), name: user.name, email: user.email, role: user.role, phone: user.phone };
+
+    res.json({ token, user: userPublic });
+  } catch (err) {
+    console.error('MERN Login Error:', err);
+    res.status(500).json({ detail: 'Login error: ' + err.message });
+  }
+});
+
+// MERN Auth: Get Current User Profile (/api/auth/me)
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  const userPublic = { id: req.user._id.toString(), name: req.user.name, email: req.user.email, role: req.user.role, phone: req.user.phone };
+  res.json(userPublic);
+});
+
+// Auction Routes
+app.get('/api/auctions', async (req, res) => {
+  try {
+    const auctions = await Auction.find().sort({ createdAt: -1 });
+    const formatted = auctions.map(a => ({
+      id: a._id.toString(),
+      name: a.name,
+      sport: a.sport,
+      date: a.date,
+      base_price: a.basePrice,
+      max_teams: a.maxTeams,
+      budget_per_team: a.budgetPerTeam,
+      description: a.description,
+      status: a.status
+    }));
+    res.json(formatted);
+  } catch (err) {
+    res.json([]);
+  }
+});
+
+app.post('/api/auctions', authMiddleware, async (req, res) => {
+  try {
+    const { name, sport, date, base_price, max_teams, budget_per_team, description } = req.body;
+    const auction = new Auction({
+      coordinatorId: req.user._id.toString(),
+      name,
+      sport: sport || 'Cricket',
+      date,
+      basePrice: base_price || 100000,
+      maxTeams: max_teams || 8,
+      budgetPerTeam: budget_per_team || 5000000,
+      description: description || ''
+    });
+    await auction.save();
+    res.json({
+      id: auction._id.toString(),
+      name: auction.name,
+      sport: auction.sport,
+      date: auction.date,
+      base_price: auction.basePrice,
+      max_teams: auction.maxTeams,
+      budget_per_team: auction.budgetPerTeam,
+      description: auction.description,
+      status: auction.status
+    });
+  } catch (err) {
+    res.status(400).json({ detail: err.message });
+  }
+});
+
+// Player Routes
+app.get('/api/players', async (req, res) => {
+  try {
+    const { auction_id } = req.query;
+    const query = auction_id ? { auctionId: auction_id } : {};
+    const players = await Player.find(query);
+    const formatted = players.map(p => ({
+      id: p._id.toString(),
+      auction_id: p.auctionId,
+      name: p.name,
+      role: p.role,
+      sport: p.sport,
+      base_price: p.basePrice,
+      city: p.city,
+      phone: p.phone,
+      jersey_number: p.jerseyNumber,
+      batting_style: p.battingStyle,
+      bowling_style: p.bowlingStyle,
+      age: p.age,
+      lot_number: p.lotNumber,
+      bio: p.bio,
+      photo_url: p.photoUrl,
+      status: p.status,
+      sold_to_team_id: p.soldToTeamId,
+      sold_price: p.soldPrice
+    }));
+    res.json(formatted);
+  } catch (err) {
+    res.json([]);
+  }
+});
+
+app.post('/api/players', async (req, res) => {
+  try {
+    const p = req.body;
+    const player = new Player({
+      auctionId: p.auction_id || 'demo_auction',
+      name: p.name,
+      role: p.role || 'Batsman',
+      sport: p.sport || 'Cricket',
+      basePrice: p.base_price || 100000,
+      city: p.city || '',
+      phone: p.phone || '',
+      jerseyNumber: p.jersey_number || 1,
+      battingStyle: p.batting_style || 'Right Hand Batsman',
+      bowlingStyle: p.bowling_style || 'Right Arm Medium',
+      age: p.age || 21,
+      lotNumber: p.lot_number || 1,
+      bio: p.bio || '',
+      photoUrl: p.photo_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop'
+    });
+    await player.save();
+    res.json({
+      id: player._id.toString(),
+      auction_id: player.auctionId,
+      name: player.name,
+      role: player.role,
+      sport: player.sport,
+      base_price: player.basePrice,
+      status: player.status
+    });
+  } catch (err) {
+    res.status(400).json({ detail: err.message });
+  }
+});
+
+// Team Routes
+app.get('/api/teams', async (req, res) => {
+  try {
+    const { auction_id } = req.query;
+    const query = auction_id ? { auctionId: auction_id } : {};
+    const teams = await Team.find(query);
+    const formatted = teams.map(t => ({
+      id: t._id.toString(),
+      auction_id: t.auctionId,
+      name: t.name,
+      owner_name: t.ownerName,
+      color: t.color,
+      purse: t.purse,
+      spent: t.spent
+    }));
+    res.json(formatted);
+  } catch (err) {
+    res.json([]);
+  }
+});
+
+app.post('/api/teams', async (req, res) => {
+  try {
+    const t = req.body;
+    const team = new Team({
+      auctionId: t.auction_id,
+      name: t.name,
+      ownerName: t.owner_name,
+      color: t.color || '#FF6B00',
+      purse: t.purse || 5000000
+    });
+    await team.save();
+    res.json({
+      id: team._id.toString(),
+      auction_id: team.auctionId,
+      name: team.name,
+      owner_name: team.ownerName,
+      color: team.color,
+      purse: team.purse,
+      spent: team.spent
+    });
+  } catch (err) {
+    res.status(400).json({ detail: err.message });
+  }
+});
+
+// Socket.IO Real-time bidding
+io.on('connection', (socket) => {
+  console.log('⚡ Socket client connected:', socket.id);
+
+  socket.on('join_auction', ({ auction_id }) => {
+    socket.join(auction_id);
+  });
+
+  socket.on('place_bid', (data) => {
+    io.to(data.auction_id).emit('new_bid', data);
+  });
+
+  socket.on('player_sold', (data) => {
+    io.to(data.auction_id).emit('player_sold', data);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+// Start Server
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 MERN Stack Node.js Express server running on port ${PORT}`);
+});

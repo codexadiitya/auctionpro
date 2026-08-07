@@ -1,19 +1,16 @@
-FROM python:3.11-slim
+FROM node:20-alpine
 
 WORKDIR /app/backend
 
-# Prevent Python from writing .pyc files & enable unbuffered logging
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Install production dependencies
+COPY backend/package*.json ./
+RUN npm install --production
 
-# Install backend dependencies
-COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy backend application source
+# Copy Node.js backend application source
 COPY backend/ ./
 
+# Expose default port
 EXPOSE 8000
 
-# Start uvicorn server binding dynamically to $PORT assigned by cloud platform
-CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Start MERN Stack Express Server
+CMD ["node", "index.js"]
