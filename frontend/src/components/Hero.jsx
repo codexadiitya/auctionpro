@@ -1,10 +1,12 @@
-import React from 'react';
-import { ArrowRight, Play, Phone, Star } from 'lucide-react';
+import React, { useState } from 'react';
+import { ArrowRight, Play, Phone, Star, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { stats } from '../mock';
 
 export default function Hero() {
+  const [demoOpen, setDemoOpen] = useState(false);
+
   return (
     <section className="relative overflow-hidden pt-12 pb-20 lg:pt-20 lg:pb-28">
       <div className="absolute inset-0 grid-bg opacity-40" />
@@ -30,11 +32,14 @@ export default function Hero() {
                 Start Your Auction <ArrowRight className="ml-2 w-4 h-4"/>
               </Button>
             </a>
-            <a href="#demo">
-              <Button size="lg" variant="outline" className="h-12 px-8 border-white/20 text-white hover:bg-white/5 hover:text-orange-400 hover:border-orange-400 bg-transparent">
-                <Play className="mr-2 w-4 h-4"/> Watch Demo
-              </Button>
-            </a>
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() => setDemoOpen(true)}
+              className="h-12 px-8 border-white/20 text-white hover:bg-white/5 hover:text-orange-400 hover:border-orange-400 bg-transparent"
+            >
+              <Play className="mr-2 w-4 h-4 text-orange-400" fill="currentColor"/> Watch Demo
+            </Button>
           </div>
 
           <div className="mt-8 flex items-center gap-3 text-white/60">
@@ -56,7 +61,7 @@ export default function Hero() {
         </div>
 
         <div className="relative">
-          <div className="relative rounded-3xl overflow-hidden border border-white/10 shadow-2xl aspect-[4/5] lg:aspect-square">
+          <div className="relative rounded-3xl overflow-hidden border border-white/10 shadow-2xl aspect-[4/5] lg:aspect-square group">
             <img
               src="https://images.unsplash.com/photo-1512719994953-eabf50895df7?w=900&h=900&fit=crop"
               alt="Cricket stadium"
@@ -64,8 +69,21 @@ export default function Hero() {
             />
             <div className="absolute inset-0 bg-gradient-to-t from-[#0a0a0f] via-transparent to-transparent"/>
             
+            {/* Center Play Button Overlay */}
+            <button
+              onClick={() => setDemoOpen(true)}
+              className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 hover:bg-black/20 transition-all group-hover:scale-105"
+            >
+              <div className="w-16 h-16 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-2xl shadow-orange-500/50">
+                <Play className="w-8 h-8 ml-1" fill="currentColor" />
+              </div>
+              <span className="text-white text-xs font-bold uppercase tracking-widest mt-3 bg-black/60 px-3 py-1 rounded-full backdrop-blur">
+                Click to Watch Interactive Demo
+              </span>
+            </button>
+
             {/* Live Indicator Card */}
-            <div className="absolute top-4 left-4 right-4 bg-black/60 backdrop-blur-lg border border-white/10 rounded-2xl p-4 flex items-center justify-between">
+            <div className="absolute top-4 left-4 right-4 bg-black/60 backdrop-blur-lg border border-white/10 rounded-2xl p-4 flex items-center justify-between pointer-events-none">
               <div>
                 <div className="text-white/60 text-xs uppercase tracking-wider">Live Now</div>
                 <div className="text-white font-semibold text-sm">Premier League Auction</div>
@@ -75,7 +93,7 @@ export default function Hero() {
               </div>
             </div>
 
-            {/* Cleaned Up Glassmorphic Consultation Card inside hero image */}
+            {/* Glassmorphic Consultation Card inside hero image */}
             <div className="absolute bottom-4 left-4 right-4 bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-2xl p-4 flex items-center justify-between shadow-2xl">
               <div>
                 <div className="flex items-center gap-1.5 text-orange-400 text-[11px] font-bold uppercase tracking-widest">
@@ -90,6 +108,35 @@ export default function Hero() {
           </div>
         </div>
       </div>
+
+      {/* ── Interactive Video Demo Modal ── */}
+      {demoOpen && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="relative w-full max-w-4xl bg-slate-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
+              <div className="flex items-center gap-2">
+                <Play className="w-5 h-5 text-orange-400" fill="currentColor"/>
+                <span className="font-display text-xl text-white">AUCTIONPRO LIVE DEMO WALKTHROUGH</span>
+              </div>
+              <button
+                onClick={() => setDemoOpen(false)}
+                className="text-white/60 hover:text-white p-2 rounded-xl hover:bg-white/10"
+              >
+                <X className="w-6 h-6"/>
+              </button>
+            </div>
+            <div className="aspect-video w-full bg-black flex items-center justify-center relative">
+              <iframe
+                className="w-full h-full"
+                src="https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1"
+                title="AuctionPro Platform Demo"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

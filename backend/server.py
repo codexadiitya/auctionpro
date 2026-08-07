@@ -1121,6 +1121,15 @@ async def list_packages():
     return PACKAGES
 
 
+class DemoCreate(BaseModel):
+    """Data for scheduling a demo."""
+    name:         str
+    email:        EmailStr
+    phone:        Optional[str] = None
+    organization: Optional[str] = None
+    sport:        Optional[str] = None
+
+
 @api_router.post("/contact", tags=["Public"])
 async def submit_contact(body: ContactCreate):
     """Save a contact form submission — no auth required."""
@@ -1133,6 +1142,22 @@ async def submit_contact(body: ContactCreate):
     }
     await db.contact_messages.insert_one(record)
     return {"success": True, "id": record["id"]}
+
+
+@api_router.post("/demo", tags=["Public"])
+async def submit_demo(body: DemoCreate):
+    """Save a demo request — no auth required."""
+    record = {
+        "id":           str(uuid.uuid4()),
+        "name":         body.name,
+        "email":        body.email,
+        "phone":        body.phone,
+        "organization": body.organization,
+        "sport":        body.sport,
+        "created_at":   utc_now().isoformat(),
+    }
+    await db.demo_requests.insert_one(record)
+    return {"success": True, "message": "Demo booked successfully! Our team will contact you shortly.", "id": record["id"]}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
