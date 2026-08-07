@@ -91,6 +91,20 @@ const upload = multer({
   }
 });
 
+// ── HTTPS & HSTS Security Headers Middleware ──
+app.use((req, res, next) => {
+  // Redirect HTTP → HTTPS automatically on cloud edge proxies
+  if (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect(301, `https://${req.headers.host}${req.url}`);
+  }
+  // HTTP Strict Transport Security (HSTS) - 1 Year Duration
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 // ── Middleware ──
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '2mb' }));
