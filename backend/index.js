@@ -27,6 +27,35 @@ const PORT = process.env.PORT || 8000;
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
 const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-production-mern-secret-2024';
 
+// ── Free Lightweight API Rate Limiter (Brute-Force & DDoS Protection) ──
+const rateLimitMap = new Map();
+
+function apiRateLimiter(maxRequests = 100, windowMs = 15 * 60 * 1000) {
+  return (req, res, next) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+
+    if (!rateLimitMap.has(ip)) {
+      rateLimitMap.set(ip, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+
+    const tracker = rateLimitMap.get(ip);
+    if (now > tracker.resetTime) {
+      tracker.count = 1;
+      tracker.resetTime = now + windowMs;
+      return next();
+    }
+
+    tracker.count += 1;
+    if (tracker.count > maxRequests) {
+      return res.status(429).json({ detail: 'Too many requests from this IP. Please wait 15 minutes.' });
+    }
+
+    next();
+  };
+}
+
 // ── Security & Input Validation Helpers ──
 function sanitizeInput(str) {
   if (typeof str !== 'string') return str;
@@ -108,6 +137,11 @@ app.use((req, res, next) => {
 // ── Middleware ──
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '2mb' }));
+
+// Apply IP Rate Limiting to Auth Endpoints (Max 20 attempts per 15 mins)
+const authLimiter = apiRateLimiter(20, 15 * 60 * 1000);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
 
 // ── MongoDB Atlas Hardened Connection ──
 mongoose.connect(MONGO_URL, {
