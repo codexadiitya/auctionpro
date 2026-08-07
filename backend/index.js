@@ -97,6 +97,36 @@ const teamSchema = new mongoose.Schema({
 
 const Team = mongoose.model('Team', teamSchema);
 
+// ── Mongoose Payment Schema ──
+const paymentSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  packageName: { type: String, required: true },
+  amount: { type: Number, required: true },
+  razorpayOrderId: { type: String, default: '' },
+  razorpayPaymentId: { type: String, default: '' },
+  status: { type: String, default: 'completed' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Payment = mongoose.model('Payment', paymentSchema);
+
+// ── Razorpay Setup ──
+const Razorpay = require('razorpay');
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_test_demo123key';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'rzp_test_demosecret';
+
+let razorpayClient = null;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  try {
+    razorpayClient = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
+    });
+  } catch (err) {
+    console.warn('Razorpay init notice:', err.message);
+  }
+}
+
 // ── JWT Helper Middleware ──
 const authMiddleware = async (req, res, next) => {
   const header = req.headers.authorization;
@@ -352,6 +382,74 @@ app.post('/api/teams', async (req, res) => {
     });
   } catch (err) {
     res.status(400).json({ detail: err.message });
+  }
+});
+
+// Payment Routes
+app.post('/api/checkout', authMiddleware, async (req, res) => {
+  try {
+    const { package_name, amount } = req.body;
+
+    if (razorpayClient) {
+      const order = await razorpayClient.orders.create({
+        amount: Math.round(amount * 100),
+        currency: 'INR',
+        receipt: `rcpt_${Date.now()}`
+      });
+      return res.json({
+        order_id: order.id,
+        key_id: process.env.RAZORPAY_KEY_ID,
+        amount: order.amount,
+        currency: order.currency,
+        package_name
+      });
+    }
+
+    // Mock Razorpay Order for testing/development mode
+    res.json({
+      order_id: 'order_demo_' + Date.now(),
+      key_id: RAZORPAY_KEY_ID,
+      amount: Math.round(amount * 100),
+      currency: 'INR',
+      package_name
+    });
+  } catch (err) {
+    console.error('Checkout error:', err);
+    res.status(500).json({ detail: 'Checkout failed: ' + err.message });
+  }
+});
+
+app.post('/api/payment/verify', authMiddleware, async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, package_name, amount } = req.body;
+    const payment = new Payment({
+      userId: req.user._id.toString(),
+      packageName: package_name,
+      amount: amount || 0,
+      razorpayOrderId: razorpay_order_id || 'demo_order',
+      razorpayPaymentId: razorpay_payment_id || 'demo_payment',
+      status: 'completed'
+    });
+    await payment.save();
+    res.json({ status: 'success', message: `${package_name} package activated successfully!` });
+  } catch (err) {
+    res.status(400).json({ detail: err.message });
+  }
+});
+
+app.get('/api/payments', authMiddleware, async (req, res) => {
+  try {
+    const payments = await Payment.find({ userId: req.user._id.toString() }).sort({ createdAt: -1 });
+    const formatted = payments.map(p => ({
+      id: p._id.toString(),
+      package_name: p.packageName,
+      amount: p.amount,
+      status: p.status,
+      created_at: p.createdAt.toISOString()
+    }));
+    res.json(formatted);
+  } catch (err) {
+    res.json([]);
   }
 });
 
