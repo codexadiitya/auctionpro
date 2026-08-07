@@ -13,6 +13,10 @@ const http = require('http');
 const { Server } = require('socket.io');
 require('dotenv').config();
 
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -23,9 +27,51 @@ const PORT = process.env.PORT || 8000;
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
 const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-production-mern-secret-2024';
 
+// ── Security & Input Validation Helpers ──
+function sanitizeInput(str) {
+  if (typeof str !== 'string') return str;
+  return str.trim().replace(/[<>]/g, ''); // Strip dangerous HTML tags to prevent XSS
+}
+
+function validateEmail(email) {
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return typeof email === 'string' && re.test(email.trim());
+}
+
+// ── File Upload Directory & Static Serving ──
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+app.use('/api/static/uploads', express.static(UPLOAD_DIR));
+
+// ── Multer Storage Configuration (5MB Limit, Restricted File Types) ──
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `player_${uniqueSuffix}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Strict 5 MB Limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|webp|gif/;
+    const extValid = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimeValid = allowedTypes.test(file.mimetype);
+    if (extValid && mimeValid) {
+      return cb(null, true);
+    }
+    cb(new Error('Invalid file format. Only JPG, PNG, WEBP, and GIF images up to 5MB are allowed.'));
+  }
+});
+
 // ── Middleware ──
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // ── MongoDB Connection ──
 mongoose.connect(MONGO_URL)
@@ -165,12 +211,46 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', stack: 'MERN (Node.js + Express + MongoDB)', timestamp: new Date().toISOString() });
 });
 
+// Secure File Upload Endpoint (Restricted file types, 5MB limit, sanitized filename)
+app.post('/api/upload', authMiddleware, (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ detail: 'File size exceeds maximum 5 MB limit.' });
+      }
+      return res.status(400).json({ detail: err.message });
+    } else if (err) {
+      return res.status(400).json({ detail: err.message });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ detail: 'No file uploaded' });
+    }
+
+    const fileUrl = `/static/uploads/${req.file.filename}`;
+    res.json({ url: fileUrl, filename: req.file.filename });
+  });
+});
+
 // MERN Auth: Register User
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role, phone } = req.body;
-    if (!email || !password || !name) {
+    const name = sanitizeInput(req.body.name);
+    const email = req.body.email ? req.body.email.trim().toLowerCase() : '';
+    const password = req.body.password;
+    const role = sanitizeInput(req.body.role);
+    const phone = sanitizeInput(req.body.phone);
+
+    if (!name || !email || !password) {
       return res.status(400).json({ detail: 'Name, email, and password are required' });
+    }
+
+    if (!validateEmail(email)) {
+      return res.status(400).json({ detail: 'Invalid email address format' });
+    }
+
+    if (typeof password !== 'string' || password.length < 6) {
+      return res.status(400).json({ detail: 'Password must be at least 6 characters long' });
     }
 
     const existing = await User.findOne({ email: email.toLowerCase() });
