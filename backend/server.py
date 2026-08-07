@@ -1097,10 +1097,13 @@ async def list_payments(current_user: Dict = Depends(get_current_user)):
 # ═════════════════════════════════════════════════════════════════════════════
 
 PACKAGES = [
-    {"id": "starter",     "name": "Starter",     "price": 999,   "auctions": 1,  "teams": 4,  "features": ["1 Auction", "Up to 4 Teams", "50 Players", "Email Support"]},
-    {"id": "pro",         "name": "Pro",          "price": 2999,  "auctions": 5,  "teams": 12, "features": ["5 Auctions", "Up to 12 Teams", "200 Players", "Priority Support", "Analytics"]},
-    {"id": "enterprise",  "name": "Enterprise",   "price": 7999,  "auctions": 20, "teams": 20, "features": ["20 Auctions", "Unlimited Teams", "Unlimited Players", "Dedicated Support", "Custom Branding"]},
-    {"id": "tournament",  "name": "Tournament",   "price": 14999, "auctions": -1, "teams": -1, "features": ["Unlimited Auctions", "Unlimited Teams", "Unlimited Players", "White Label", "API Access", "SLA Support"]},
+    {"id": "free",       "name": "Free",      "price": 0,    "auctions": 1, "teams": 2,  "color": "#F43F5E", "features": ["1 Auction", "Up to 2 Teams", "Live Bidding Room", "Basic Stats"]},
+    {"id": "tier_3000",  "name": "4 Teams",   "price": 3000, "auctions": 1, "teams": 4,  "color": "#10B981", "features": ["1 Auction", "Up to 4 Teams", "Live Bidding Room", "Fortune Wheel", "WhatsApp Alerts"]},
+    {"id": "tier_4000",  "name": "8 Teams",   "price": 4000, "auctions": 1, "teams": 8,  "color": "#F59E0B", "features": ["1 Auction", "Up to 8 Teams", "Live Bidding Room", "Fortune Wheel", "WhatsApp Alerts"]},
+    {"id": "tier_5000",  "name": "12 Teams",  "price": 5000, "auctions": 1, "teams": 12, "color": "#3B82F6", "features": ["1 Auction", "Up to 12 Teams", "Live Bidding Room", "Fortune Wheel", "WhatsApp Alerts"]},
+    {"id": "tier_6000",  "name": "16 Teams",  "price": 6000, "auctions": 1, "teams": 16, "color": "#14B8A6", "features": ["1 Auction", "Up to 16 Teams", "Live Bidding Room", "Fortune Wheel", "WhatsApp Alerts"]},
+    {"id": "tier_7000",  "name": "22 Teams",  "price": 7000, "auctions": 1, "teams": 22, "color": "#8B5CF6", "features": ["1 Auction", "Up to 22 Teams", "Live Bidding Room", "Fortune Wheel", "WhatsApp Alerts"]},
+    {"id": "tier_8000",  "name": "30 Teams",  "price": 8000, "auctions": 1, "teams": 30, "color": "#EA580C", "features": ["1 Auction", "Up to 30 Teams", "Live Bidding Room", "Fortune Wheel", "WhatsApp Alerts"]},
 ]
 
 
