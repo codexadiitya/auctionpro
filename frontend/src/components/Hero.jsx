@@ -61,7 +61,7 @@ export default function Hero() {
         </div>
 
         <div className="relative mt-4 lg:mt-0">
-          <div className="relative rounded-3xl overflow-hidden border border-white/15 shadow-2xl aspect-[4/5] sm:aspect-[16/10] lg:aspect-square group">
+          <div className="relative rounded-3xl overflow-hidden border border-white/15 shadow-2xl h-[380px] sm:h-[450px] lg:h-[500px] w-full group">
             <img
               src="https://images.unsplash.com/photo-1512719994953-eabf50895df7?w=900&h=900&fit=crop"
               alt="Cricket stadium"
