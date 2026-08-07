@@ -17,4 +17,4 @@ COPY backend/ ./
 EXPOSE 8000
 
 # Start uvicorn server — use PORT env var if set by Railway, else 8000
-CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}"]

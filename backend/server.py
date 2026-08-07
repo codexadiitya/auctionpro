@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 # ─────────────────────────────────────────────────────────────────────────────
 # Third-Party Imports
 # ─────────────────────────────────────────────────────────────────────────────
+import certifi
 import bcrypt
 import jwt as pyjwt
 import razorpay
@@ -101,10 +102,12 @@ CORS_ORIGINS = [
 # Create upload directory if it doesn't exist
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Database Connection
-# ─────────────────────────────────────────────────────────────────────────────
-mongo_client = AsyncIOMotorClient(MONGO_URL)
+try:
+    mongo_client = AsyncIOMotorClient(MONGO_URL, tlsCAFile=certifi.where())
+except Exception:
+    mongo_client = AsyncIOMotorClient(MONGO_URL)
+
 db = mongo_client[DB_NAME]
 
 # ─────────────────────────────────────────────────────────────────────────────
