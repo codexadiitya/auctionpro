@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Menu, X, Zap, LogIn, LayoutDashboard } from 'lucide-react';
+import { Menu, X, Zap, LogIn, LayoutDashboard, Sun, Moon } from 'lucide-react';
 import { Button } from './ui/button';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 const navItems = [
   { label: 'Home', to: '/' },
@@ -17,11 +18,12 @@ export default function Header() {
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   const { user, logout } = useAuth() || {};
+  const { isDark, toggleTheme } = useTheme();
 
   const dashHref = user?.role === 'coordinator' ? '/dashboard' : '/player/profile';
 
   return (
-    <header className="sticky top-0 z-50 backdrop-blur-lg bg-[#0a0a0f]/80 border-b border-white/5">
+    <header className="sticky top-0 z-50 backdrop-blur-lg bg-[#0a0a0f]/80 border-b border-white/5 transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 lg:h-20">
           <Link to="/" className="flex items-center gap-2 group">
@@ -44,6 +46,20 @@ export default function Header() {
           </nav>
 
           <div className="hidden lg:flex items-center gap-3">
+            {/* ☀️ / 🌙 Day Mode Toggle Button */}
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all flex items-center justify-center border border-white/10"
+              title={isDark ? 'Switch to Day Mode (Light)' : 'Switch to Night Mode (Dark)'}
+              aria-label="Toggle Theme"
+            >
+              {isDark ? (
+                <Sun className="w-4 h-4 text-amber-400 animate-spin-slow" />
+              ) : (
+                <Moon className="w-4 h-4 text-orange-400" />
+              )}
+            </button>
+
             <Link to="/register-player" className="text-sm font-medium text-white/80 hover:text-orange-400">Player Register</Link>
             {user ? (
               <>
@@ -58,9 +74,19 @@ export default function Header() {
             )}
           </div>
 
-          <button className="lg:hidden text-white" onClick={() => setOpen(!open)}>
-            {open ? <X /> : <Menu />}
-          </button>
+          <div className="flex items-center gap-2 lg:hidden">
+            {/* Mobile Day/Night Mode Toggle Button */}
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-xl bg-white/10 text-white border border-white/10"
+              aria-label="Toggle Theme"
+            >
+              {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-orange-400" />}
+            </button>
+            <button className="text-white p-2" onClick={() => setOpen(!open)}>
+              {open ? <X /> : <Menu />}
+            </button>
+          </div>
         </div>
 
         {open && (
