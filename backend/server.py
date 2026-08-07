@@ -341,6 +341,10 @@ class PlayerCreate(BaseModel):
     city:           Optional[str] = None
     phone:          Optional[str] = None
     jersey_number:  Optional[int] = None
+    batting_style:  Optional[str] = "Right Hand Batsman"
+    bowling_style:  Optional[str] = "Right Arm Medium"
+    age:            Optional[int] = 21
+    lot_number:     Optional[int] = 1
     bio:            Optional[str] = None
     photo_url:      Optional[str] = None
 
@@ -660,21 +664,25 @@ async def register_player(body: PlayerCreate):
         raise HTTPException(status_code=404, detail="Auction not found")
 
     player = {
-        "id":           str(uuid.uuid4()),
-        "auction_id":   body.auction_id,
-        "name":         body.name,
-        "role":         body.role,
-        "sport":        body.sport,
-        "base_price":   body.base_price,
-        "city":         body.city,
-        "phone":        body.phone,
+        "id":            str(uuid.uuid4()),
+        "auction_id":    body.auction_id,
+        "name":          body.name,
+        "role":          body.role,
+        "sport":         body.sport,
+        "base_price":    body.base_price,
+        "city":          body.city,
+        "phone":         body.phone,
         "jersey_number": body.jersey_number,
-        "bio":          body.bio,
-        "photo_url":    body.photo_url,
-        "status":       "registered",   # registered | sold | unsold
-        "sold_to_team": None,
-        "sold_price":   None,
-        "created_at":   utc_now().isoformat(),
+        "batting_style": body.batting_style or "Right Hand Batsman",
+        "bowling_style": body.bowling_style or "Right Arm Medium",
+        "age":           body.age or 21,
+        "lot_number":    body.lot_number or 1,
+        "bio":           body.bio,
+        "photo_url":     body.photo_url,
+        "status":        "registered",   # registered | sold | unsold
+        "sold_to_team":  None,
+        "sold_price":    None,
+        "created_at":    utc_now().isoformat(),
     }
     await db.players.insert_one(player)
     player.pop("_id", None)
