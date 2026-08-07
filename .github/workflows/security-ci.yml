@@ -1,0 +1,32 @@
+name: Security & Code Quality CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  security-audit:
+    name: Security & SAST Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Audit Backend Dependencies
+        run: |
+          cd backend
+          npm install
+          npm audit --audit-level=high
+
+      - name: Audit Frontend Dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+          npm audit --audit-level=high
