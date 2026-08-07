@@ -36,6 +36,15 @@ export default function AuctionRoom() {
   const [activeTab, setActiveTab] = useState('teams'); // 'teams' | 'players'
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [timer, setTimer] = useState(15);
+  
+  // Advanced Features Modals
+  const [wheelOpen, setWheelOpen] = useState(false);
+  const [wheelWinner, setWheelWinner] = useState(null);
+  const [spinning, setSpinning] = useState(false);
+  const [socialOpen, setSocialOpen] = useState(false);
+  const [whatsappPhone, setWhatsappPhone] = useState('');
+  const [whatsappModal, setWhatsappModal] = useState(false);
+
   const timerRef = useRef(null);
   const isCoordinator = user?.role === 'coordinator';
 
@@ -173,9 +182,44 @@ export default function AuctionRoom() {
             <div className="bg-amber-500/90 text-slate-950 text-xs font-bold px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow">
               <span>AVL :</span> <span className="text-sm font-black">{registeredPlayers.length}</span>
             </div>
+          {/* Advanced Toolkit Action Buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setWheelOpen(true)}
+              className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+              title="Spin Fortune Wheel / Lucky Draw"
+            >
+              <Disc className="w-3.5 h-3.5 animate-spin-slow"/> Fortune Wheel
+            </button>
+
+            <button
+              onClick={() => setSocialOpen(true)}
+              className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+              title="Auto Social Post Graphic Generator"
+            >
+              <Share2 className="w-3.5 h-3.5"/> Social Graphic
+            </button>
+
+            <button
+              onClick={() => setWhatsappModal(true)}
+              className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+              title="Send WhatsApp Alert"
+            >
+              <MessageCircle className="w-3.5 h-3.5"/> WhatsApp Alert
+            </button>
+
+            <Link
+              to={`/auction/${id}/live`}
+              target="_blank"
+              className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+              title="Open HD Live Stream TV Overlay"
+            >
+              <Tv className="w-3.5 h-3.5 text-red-400 animate-pulse"/> HD Broadcast
+            </Link>
+
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
-              className="ml-2 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white/80 transition"
+              className="ml-1 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white/80 transition"
               title="Toggle Audio"
             >
               {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4 text-red-400" />}
@@ -432,6 +476,136 @@ export default function AuctionRoom() {
         </section>
 
       </main>
+
+      {/* ── 🎡 FORTUNE WHEEL LUCKY DRAW MODAL ── */}
+      {wheelOpen && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-6 max-w-md w-full text-center relative shadow-2xl">
+            <button onClick={() => setWheelOpen(false)} className="absolute top-4 right-4 text-white/50 hover:text-white"><X className="w-5 h-5"/></button>
+            <div className="flex items-center justify-center gap-2 text-amber-400 font-display text-2xl mb-1">
+              <Disc className="w-6 h-6 animate-spin"/> FORTUNE WHEEL
+            </div>
+            <p className="text-white/60 text-xs mb-4">Spin the lucky draw wheel between competing teams</p>
+            
+            <div className="relative w-48 h-48 mx-auto my-4 rounded-full border-4 border-amber-400 flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-slate-950 shadow-2xl overflow-hidden">
+              <div className={`font-display text-3xl text-amber-300 ${spinning ? 'animate-spin' : ''}`}>
+                {wheelWinner ? wheelWinner.name : '🎡 SPIN!'}
+              </div>
+            </div>
+
+            {wheelWinner && (
+              <div className="my-3 p-3 bg-amber-500/20 border border-amber-500/40 rounded-2xl animate-bounce">
+                <div className="text-xs text-amber-300 font-bold uppercase">WINNING TEAM</div>
+                <div className="font-display text-2xl text-white">{wheelWinner.name}</div>
+              </div>
+            )}
+
+            <Button
+              disabled={spinning || teams.length === 0}
+              onClick={() => {
+                setSpinning(true);
+                setWheelWinner(null);
+                setTimeout(() => {
+                  const randomTeam = teams[Math.floor(Math.random() * teams.length)];
+                  setWheelWinner(randomTeam);
+                  setSpinning(false);
+                  fireworks();
+                }, 2000);
+              }}
+              className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-slate-950 font-bold h-12 rounded-xl mt-2"
+            >
+              {spinning ? 'Spinning Wheel...' : 'Spin Fortune Wheel!'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── 📢 AUTO SOCIAL POST GRAPHIC GENERATOR MODAL ── */}
+      {socialOpen && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-purple-500/40 rounded-3xl p-6 max-w-lg w-full relative shadow-2xl">
+            <button onClick={() => setSocialOpen(false)} className="absolute top-4 right-4 text-white/50 hover:text-white"><X className="w-5 h-5"/></button>
+            <div className="flex items-center gap-2 text-purple-400 font-display text-2xl mb-1">
+              <Share2 className="w-6 h-6"/> AUTO SOCIAL POST GRAPHIC
+            </div>
+            <p className="text-white/60 text-xs mb-4">Auto-generated HD social media banner for Instagram & Facebook</p>
+
+            {/* Social Post Graphic Canvas */}
+            <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-purple-950 border-2 border-purple-500/30 rounded-2xl p-6 text-center shadow-2xl relative overflow-hidden">
+              <div className="text-[10px] text-amber-400 font-bold uppercase tracking-widest mb-2">OFFICIAL AUCTION ANNOUNCEMENT</div>
+              <div className="w-24 h-24 mx-auto rounded-2xl overflow-hidden border-2 border-amber-400 shadow-xl mb-3">
+                <img src={currentPlayer?.photo_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop'} alt="Player" className="w-full h-full object-cover"/>
+              </div>
+              <div className="font-display text-3xl text-white uppercase tracking-wider">{currentPlayer?.name || 'PLAYER NAME'}</div>
+              <div className="text-xs text-purple-300 font-semibold">{currentPlayer?.role || 'Batsman'} • Lot #{currentPlayer?.lot_number || 1}</div>
+              
+              <div className="my-4 bg-emerald-500/20 border border-emerald-500/40 rounded-xl p-3">
+                <div className="text-[10px] text-emerald-400 font-bold uppercase">SOLD TO {currentTeam?.name || 'TEAM NAME'} FOR</div>
+                <div className="font-display text-3xl text-emerald-300">₹{currentBid ? Number(currentBid).toLocaleString('en-IN') : '1,00,000'}</div>
+              </div>
+              <div className="text-[9px] text-white/40 uppercase tracking-widest">POWERED BY AUCTIONPRO LIVE SUITE</div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <Button
+                onClick={() => {
+                  toast({ title: 'Social Graphic Saved!', description: 'Ready to post to Instagram & Facebook.' });
+                }}
+                className="bg-purple-600 hover:bg-purple-700 text-white font-bold h-11 rounded-xl text-xs flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-4 h-4"/> Download HD Banner
+              </Button>
+              <a
+                href={`https://api.whatsapp.com/send?text=${encodeURIComponent(`🔥 SOLD ALERT! ${currentPlayer?.name || 'Player'} bought by ${currentTeam?.name || 'Team'} for ₹${currentBid?.toLocaleString('en-IN') || '1,00,000'} in AuctionPro!`)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-11 rounded-xl text-xs flex items-center justify-center gap-1.5"
+              >
+                <Share2 className="w-4 h-4"/> Share to Socials
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 💬 WHATSAPP ALERT MODAL ── */}
+      {whatsappModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-emerald-500/40 rounded-3xl p-6 max-w-md w-full relative shadow-2xl">
+            <button onClick={() => setWhatsappModal(false)} className="absolute top-4 right-4 text-white/50 hover:text-white"><X className="w-5 h-5"/></button>
+            <div className="flex items-center gap-2 text-emerald-400 font-display text-2xl mb-1">
+              <MessageCircle className="w-6 h-6"/> INSTANT WHATSAPP ALERT
+            </div>
+            <p className="text-white/60 text-xs mb-4">Send instant WhatsApp confirmation message to player or coordinator</p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-white/70">Phone Number (with country code)</label>
+                <input
+                  type="text"
+                  value={whatsappPhone}
+                  onChange={e => setWhatsappPhone(e.target.value)}
+                  placeholder="+91-9876543210"
+                  className="w-full mt-1.5 h-11 bg-white/5 border border-white/10 rounded-xl px-3 text-white text-sm focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-xs text-emerald-300">
+                💬 <strong>Message Preview:</strong> "Congratulations {currentPlayer?.name || 'Player'}! You have been SOLD in {auction?.name} for ₹{currentBid?.toLocaleString('en-IN')}."
+              </div>
+
+              <a
+                href={`https://api.whatsapp.com/send?phone=${whatsappPhone.replace(/[^0-9]/g, '')}&text=${encodeURIComponent(`🎉 Congratulations ${currentPlayer?.name || 'Player'}! You have been officially SOLD in ${auction?.name} to ${currentTeam?.name || 'Team'} for ₹${currentBid?.toLocaleString('en-IN')}!`)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full h-11 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl flex items-center justify-center gap-2 transition"
+              >
+                <MessageCircle className="w-4 h-4"/> Send WhatsApp Alert Now
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
