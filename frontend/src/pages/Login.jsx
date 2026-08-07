@@ -51,15 +51,35 @@ export default function Login() {
             <Input data-testid="login-password" required type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})}
               placeholder="••••••••" className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-orange-500"/>
           </div>
-          <Button data-testid="login-submit" disabled={loading} className="w-full h-11 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold">
+          <Button data-testid="login-submit" disabled={loading} className="w-full h-11 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold rounded-xl shadow-lg shadow-orange-500/20">
             {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Signing in...</> : 'Sign In'}
           </Button>
         </form>
+
+        <div className="relative my-6 flex items-center justify-center">
+          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/10"></div></div>
+          <span className="relative bg-[#0d0e19] px-3 text-xs text-white/40 uppercase tracking-widest font-semibold">Or Quick Demo Login</span>
+        </div>
+
+        <div className="space-y-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={async () => {
+              const u = await login('coordinator@auctionpro.com', 'demo123');
+              nav('/dashboard');
+            }}
+            className="w-full h-10 border-white/10 bg-white/5 hover:bg-white/10 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2"
+          >
+            ⚡ Instant Login as Coordinator
+          </Button>
+        </div>
+
         <p className="text-center text-white/60 text-sm mt-6">
-          Don't have an account? <Link to="/register" className="text-orange-400 hover:underline">Sign up</Link>
+          Don't have an account? <Link to="/register" className="text-orange-400 font-semibold hover:underline">Sign up</Link>
         </p>
         <p className="text-center text-white/40 text-xs mt-2">
-          Are you a player? <Link to="/register-player" className="text-orange-400 hover:underline">Register here</Link>
+          Are you a player? <Link to="/register-player" className="text-orange-400 font-semibold hover:underline">Register here</Link>
         </p>
       </Card>
     </div>
