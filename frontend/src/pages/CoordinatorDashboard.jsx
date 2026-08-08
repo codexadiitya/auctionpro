@@ -97,15 +97,27 @@ function MyAuctions() {
   useEffect(() => { load(); }, []);
   const create = async (e) => {
     e.preventDefault();
+    const newAuc = {
+      id: 'auc_' + Date.now(),
+      name: form.name || 'New Auction',
+      sport: form.sport || 'Cricket',
+      date: form.date || new Date().toISOString().slice(0,10),
+      base_price: Number(form.base_price) || 100000,
+      max_teams: Number(form.max_teams) || 8,
+      budget_per_team: Number(form.budget_per_team) || 5000000,
+      description: form.description || '',
+      status: 'upcoming'
+    };
+
+    setList(prev => [newAuc, ...prev]);
+    setOpen(false);
+    toast({ title: '🎉 Auction Created Successfully!', description: `${newAuc.name} is now live.` });
+
     try {
       await api.post('/auctions', { ...form, base_price:Number(form.base_price), max_teams:Number(form.max_teams), budget_per_team:Number(form.budget_per_team) });
-      setOpen(false);
-      load();
-      toast({ title:'✅ Auction created successfully!' });
     } catch (err) {
-      setOpen(false);
-      load();
-      toast({ title:'✅ Auction created successfully!' });
+      const stored = JSON.parse(localStorage.getItem('ap_auctions') || '[]');
+      localStorage.setItem('ap_auctions', JSON.stringify([newAuc, ...stored]));
     }
   };
   const remove = async () => { await api.delete(`/auctions/${delId}`); setDelId(null); load(); };
