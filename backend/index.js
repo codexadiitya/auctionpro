@@ -30,44 +30,39 @@ const MONGO_URL = process.env.MONGO_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!MONGO_URL) {
-  console.error('❌ FATAL ERROR: MONGO_URL environment variable is required. Server startup aborted.');
-  if (process.env.NODE_ENV === 'production' || process.env.STRICT_ENV === 'true') {
-    process.exit(1);
-  }
+  throw new Error('MONGO_URL environment variable is required.');
 }
-if (!JWT_SECRET) {
-  console.error('❌ FATAL ERROR: JWT_SECRET environment variable is required. Server startup aborted.');
-  if (process.env.NODE_ENV === 'production' || process.env.STRICT_ENV === 'true') {
-    process.exit(1);
-  }
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET environment variable is required and must be at least 32 characters.');
 }
 
-// Active Environment Settings
-const activeMongoUrl = MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
-const activeJwtSecret = JWT_SECRET || 'auctionpro-secure-production-jwt-secret-key-2026';
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || process.env.CORS_ORIGINS || 'https://auctionpro-eight.vercel.app';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://auctionpro-eight.vercel.app';
 
 // ── Security Middleware ──
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
 const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://127.0.0.1:3000',
   'https://auctionpro-eight.vercel.app',
   FRONTEND_URL
 ].filter(Boolean);
 
+if (process.env.NODE_ENV !== 'production') {
+  allowedOrigins.push(
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000'
+  );
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
-      callback(null, true);
-    } else {
-      callback(new Error('Blocked by CORS policy'));
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
     }
+    return callback(new Error('Blocked by CORS policy'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -174,21 +169,23 @@ const upload = multer({
 function validateImageMagicBytes(buffer) {
   if (!buffer || buffer.length < 4) return false;
   // JPEG: FF D8 FF
-  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return true;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return true;
   // PNG: 89 50 4E 47
-  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return true;
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return true;
   // GIF: 47 49 46 38 ("GIF8")
   if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return true;
   // WEBP: RIFF...WEBP
-  if (buffer.length >= 12 &&
-      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
-      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) return true;
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) return true;
 
   return false;
 }
 
 // ── MongoDB Atlas Connection ──
-mongoose.connect(activeMongoUrl, {
+mongoose.connect(MONGO_URL, {
   maxPoolSize: 10,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
@@ -300,7 +297,7 @@ const authMiddleware = async (req, res, next) => {
       return sendError(res, 'Authentication token required.', 'UNAUTHORIZED', 401);
     }
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, activeJwtSecret);
+    const decoded = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(decoded.id).select(userPublicSelect);
     if (!user) {
       return sendError(res, 'User session invalid. Please log in again.', 'UNAUTHORIZED', 401);
@@ -336,49 +333,49 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// Authentication Routes (Role Escalation Protection)
+// Authentication Routes (Strict Role Escalation Protection)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role, admin_key, phone } = req.body;
+    const { name, email, password, phone, role: requestedRole, admin_key } = req.body;
     if (!name || !email || !password) {
-      return sendError(res, 'Name, email, and password are required fields.', 'VALIDATION_ERROR', 400);
+      return sendError(res, 'Name, email and password are required.', 'VALIDATION_ERROR', 400);
     }
-    const cleanEmail = email.trim().toLowerCase();
-    const existing = await User.findOne({ email: cleanEmail });
-    if (existing) {
-      return sendError(res, 'An account with this email address already exists.', 'CONFLICT', 409);
-    }
-    if (password.length < 6) {
-      return sendError(res, 'Password must be at least 6 characters long.', 'VALIDATION_ERROR', 400);
+    if (password.length < 8) {
+      return sendError(res, 'Password must be at least 8 characters.', 'VALIDATION_ERROR', 400);
     }
 
-    // Role Escalation Security: Public registration defaults to 'player' or 'owner'.
-    // Registering as 'coordinator' requires administrative key authorization.
+    const cleanEmail = email.trim().toLowerCase();
+    const exists = await User.exists({ email: cleanEmail });
+    if (exists) {
+      return sendError(res, 'An account with this email already exists.', 'CONFLICT', 409);
+    }
+
+    // NEVER trust coordinator role from public registration.
     let userRole = 'player';
-    if (role === 'owner') {
+    if (requestedRole === 'owner') {
       userRole = 'owner';
-    } else if (role === 'coordinator') {
-      const expectedAdminKey = process.env.ADMIN_REGISTRATION_KEY || 'auctionpro_admin_secret_2026';
-      if (admin_key && admin_key === expectedAdminKey) {
+    }
+    if (requestedRole === 'coordinator') {
+      const expectedAdminKey = process.env.ADMIN_REGISTRATION_KEY;
+      if (expectedAdminKey && admin_key === expectedAdminKey) {
         userRole = 'coordinator';
       } else {
-        return sendError(res, 'Coordinator registration requires administrative authorization.', 'FORBIDDEN', 403);
+        return sendError(res, 'Coordinator accounts must be provisioned by an administrator.', 'FORBIDDEN', 403);
       }
     }
 
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    const user = new User({
+    const user = await User.create({
       name: name.trim(),
       email: cleanEmail,
       passwordHash,
       role: userRole,
-      phone: phone ? phone.trim() : ''
+      phone: phone?.trim() || ''
     });
-    await user.save();
 
-    const token = jwt.sign({ id: user._id.toString(), role: user.role }, activeJwtSecret, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     const userPublic = {
       id: user._id.toString(),
       name: user.name,
@@ -408,7 +405,7 @@ app.post('/api/auth/login', async (req, res) => {
       return sendError(res, 'Invalid email or password.', 'UNAUTHORIZED', 401);
     }
 
-    const token = jwt.sign({ id: user._id.toString(), role: user.role }, activeJwtSecret, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     const userPublic = {
       id: user._id.toString(),
       name: user.name,
@@ -468,7 +465,7 @@ app.get('/api/auctions', async (req, res) => {
     if (mine === 'true' && req.headers.authorization) {
       try {
         const token = req.headers.authorization.split(' ')[1];
-        const decoded = jwt.verify(token, activeJwtSecret);
+        const decoded = jwt.verify(token, JWT_SECRET);
         query.coordinatorId = decoded.id;
       } catch (e) {}
     }
@@ -495,7 +492,7 @@ app.get('/api/auctions', async (req, res) => {
 
 app.get('/api/auctions/public', async (req, res) => {
   try {
-    const auctions = await Auction.find().sort({ createdAt: -1 });
+    const auctions = await Auction.find({ status: { $in: ['upcoming', 'live', 'paused', 'completed'] } }).sort({ createdAt: -1 });
     const formatted = auctions.map(a => ({
       id: a._id.toString(),
       name: a.name,
@@ -593,9 +590,12 @@ app.post('/api/auctions', authMiddleware, requireRole('coordinator'), async (req
   }
 });
 
+// Atomic Transaction Auction Deletion
 app.delete('/api/auctions/:id', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    const auction = await Auction.findById(req.params.id);
+    const auctionId = req.params.id;
+    const auction = await Auction.findById(auctionId);
     if (!auction) {
       return sendError(res, 'Auction not found.', 'NOT_FOUND', 404);
     }
@@ -603,16 +603,18 @@ app.delete('/api/auctions/:id', authMiddleware, requireRole('coordinator'), asyn
       return sendError(res, 'You are only authorized to delete auctions created by your account.', 'FORBIDDEN', 403);
     }
 
-    await Promise.all([
-      Auction.findByIdAndDelete(req.params.id),
-      Team.deleteMany({ auctionId: req.params.id }),
-      Player.deleteMany({ auctionId: req.params.id }),
-      Bid.deleteMany({ auctionId: req.params.id })
-    ]);
+    await session.withTransaction(async () => {
+      await Bid.deleteMany({ auctionId }, { session });
+      await Player.deleteMany({ auctionId }, { session });
+      await Team.deleteMany({ auctionId }, { session });
+      await Auction.deleteOne({ _id: auctionId }, { session });
+    });
 
-    return sendSuccess(res, { message: 'Auction and related teams/players deleted successfully.' });
+    return sendSuccess(res, { message: 'Auction deleted.' });
   } catch (err) {
     return sendError(res, 'Failed to delete auction: ' + err.message, 'SERVER_ERROR', 500);
+  } finally {
+    await session.endSession();
   }
 });
 
@@ -863,7 +865,7 @@ app.post('/api/bids', authMiddleware, async (req, res) => {
     const isOwnerByName = team.ownerName && req.user.name && team.ownerName.toLowerCase().trim() === req.user.name.toLowerCase().trim();
 
     if (!isCoordinator && !isTeamOwner && !isOwnerByName && req.user.role !== 'coordinator') {
-      return sendError(res, 'You are not authorized to place bids on behalf of this team.', 'UNAUTHORIZED_TEAM_BID', 403);
+      return sendError(res, 'You do not control this team.', 'FORBIDDEN', 403);
     }
 
     // 3. Verify auction & player status
@@ -930,64 +932,86 @@ app.post('/api/bids', authMiddleware, async (req, res) => {
   }
 });
 
-// Mark Player Sold (Atomic Transaction-Safe Purse Deduction & Duplicate Sale Rejection)
+// Server-Authoritative SOLD Transaction (Mongoose Transaction & Automatic Winning Team/Price Retrieval)
 app.post('/api/auction/sold', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    const { auction_id, player_id, team_id, price } = req.body;
-    if (!auction_id || !player_id || !team_id) {
-      return sendError(res, 'Auction ID, player ID, and winning team ID required.', 'VALIDATION_ERROR', 400);
+    const { auction_id, player_id } = req.body;
+    if (!auction_id || !player_id) {
+      return sendError(res, 'Auction ID and player ID required.', 'VALIDATION_ERROR', 400);
     }
 
-    const soldPrice = Number(price);
+    let resultData = null;
+    await session.withTransaction(async () => {
+      // 1. Load authoritative live auction
+      const auction = await Auction.findOne({
+        _id: auction_id,
+        coordinatorId: req.user._id,
+        status: 'live',
+        currentPlayerId: player_id
+      }).session(session);
 
-    // Atomic Check: Player must be 'live' to be sold
-    const player = await Player.findOneAndUpdate(
-      { _id: player_id, status: 'live' },
-      { $set: { status: 'sold', soldToTeamId: team_id, soldPrice: soldPrice } },
-      { new: true }
-    );
+      if (!auction) {
+        throw Object.assign(new Error('Live auction or active player not found.'), { statusCode: 404 });
+      }
 
-    if (!player) {
-      return sendError(res, 'Cannot sell player: player is not active or has already been sold/unsold.', 'INVALID_PLAYER_STATE', 409);
-    }
+      const winningTeamId = auction.currentTeamId;
+      const finalPrice = auction.currentBid;
 
-    // Atomic Team Purse Deduction
-    const team = await Team.findByIdAndUpdate(
-      team_id,
-      { $inc: { spent: soldPrice } },
-      { new: true }
-    );
+      if (!winningTeamId || !finalPrice || finalPrice <= 0) {
+        throw Object.assign(new Error('No valid bid exists for this player.'), { statusCode: 400 });
+      }
 
-    // Clear Auction Active State
-    await Auction.findByIdAndUpdate(auction_id, {
-      $set: { currentPlayerId: null, currentBid: 0, currentTeamId: null }
+      // 2. Load active live player
+      const player = await Player.findOne({ _id: player_id, status: 'live' }).session(session);
+      if (!player) {
+        throw Object.assign(new Error('Player is not active or has already been sold/unsold.'), { statusCode: 409 });
+      }
+
+      // 3. Load winning team
+      const team = await Team.findById(winningTeamId).session(session);
+      if (!team) {
+        throw Object.assign(new Error('Winning team invalid.'), { statusCode: 404 });
+      }
+
+      // 4. Verify purse
+      const remainingPurse = team.purse - team.spent;
+      if (finalPrice > remainingPurse) {
+        throw Object.assign(new Error('Winning team does not have sufficient remaining purse.'), { statusCode: 400 });
+      }
+
+      // 5. Deduct team balance
+      team.spent += finalPrice;
+      await team.save({ session });
+
+      // 6. Mark player SOLD
+      player.status = 'sold';
+      player.soldToTeamId = team._id;
+      player.soldPrice = finalPrice;
+      await player.save({ session });
+
+      // 7. Clear auction current player
+      auction.currentPlayerId = null;
+      auction.currentBid = 0;
+      auction.currentTeamId = null;
+      await auction.save({ session });
+
+      resultData = {
+        player: { id: player._id.toString(), name: player.name, status: player.status, sold_price: player.soldPrice },
+        team: { id: team._id.toString(), name: team.name, owner_name: team.ownerName, purse: team.purse, spent: team.spent },
+        price: finalPrice
+      };
     });
-
-    const teamFormatted = {
-      id: team._id.toString(),
-      name: team.name,
-      owner_name: team.ownerName,
-      purse: team.purse,
-      spent: team.spent
-    };
-
-    const playerFormatted = {
-      id: player._id.toString(),
-      name: player.name,
-      status: player.status,
-      sold_price: player.soldPrice
-    };
 
     // Broadcast Socket.IO Event
-    io.to(auction_id).emit('sold', {
-      player: playerFormatted,
-      team: teamFormatted,
-      price: soldPrice
-    });
+    io.to(auction_id).emit('sold', resultData);
 
-    return sendSuccess(res, { message: 'Player marked as sold successfully.', player: playerFormatted, team: teamFormatted });
+    return sendSuccess(res, { message: 'Player marked as sold successfully.', ...resultData });
   } catch (err) {
-    return sendError(res, 'Failed to mark player as sold: ' + err.message, 'SERVER_ERROR', 500);
+    const statusCode = err.statusCode || 500;
+    return sendError(res, err.message, statusCode === 409 ? 'CONFLICT' : 'SERVER_ERROR', statusCode);
+  } finally {
+    await session.endSession();
   }
 });
 
@@ -1045,7 +1069,7 @@ const handleUpload = (req, res) => {
       const buffer = fs.readFileSync(req.file.path);
       if (!validateImageMagicBytes(buffer)) {
         fs.unlinkSync(req.file.path); // Delete invalid file immediately
-        return sendError(res, 'Invalid image file content. File failed magic byte verification.', 'INVALID_FILE_CONTENT', 400);
+        return sendError(res, 'Invalid image content.', 'INVALID_FILE_CONTENT', 400);
       }
     } catch (e) {
       return sendError(res, 'File content verification failed.', 'FILE_VERIFICATION_ERROR', 400);
@@ -1065,7 +1089,15 @@ app.post('/api/checkout', authMiddleware, async (req, res) => {
   try {
     const { package_id, package_name } = req.body;
     const pkgKey = package_id || package_name || 'tier_starter';
-    const pkg = PACKAGES[pkgKey] || PACKAGES['tier_starter'];
+    const pkg = PACKAGES[pkgKey];
+
+    if (!pkg) {
+      return sendError(res, 'Invalid package.', 'INVALID_PACKAGE', 400);
+    }
+
+    if (pkg.price > 0 && (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET)) {
+      return sendError(res, 'Payments are temporarily unavailable.', 'PAYMENT_NOT_CONFIGURED', 503);
+    }
 
     const amountInPaisa = Math.round(pkg.price * 100);
 
@@ -1095,7 +1127,7 @@ app.post('/api/checkout', authMiddleware, async (req, res) => {
 
     return sendSuccess(res, {
       order_id: orderId,
-      key_id: RAZORPAY_KEY_ID || 'rzp_test_demo123key',
+      key_id: RAZORPAY_KEY_ID || '',
       amount: amountInPaisa,
       currency: 'INR',
       package_name: pkg.name
@@ -1107,39 +1139,40 @@ app.post('/api/checkout', authMiddleware, async (req, res) => {
 
 app.post('/api/payment/verify', authMiddleware, async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, package_name, amount } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
     if (!razorpay_order_id) {
       return sendError(res, 'Order ID is required.', 'VALIDATION_ERROR', 400);
     }
 
-    // Cryptographic Signature Verification
+    const payment = await Payment.findOne({ razorpayOrderId: razorpay_order_id });
+    if (!payment) {
+      return sendError(res, 'Payment order record not found.', 'NOT_FOUND', 404);
+    }
+
+    // Cryptographic Signature Timing-Safe Verification
     if (RAZORPAY_KEY_SECRET) {
-      if (!razorpay_signature) {
-        return sendError(res, 'Payment signature is required for verification.', 'MISSING_SIGNATURE', 400);
+      if (!razorpay_signature || !razorpay_payment_id) {
+        return sendError(res, 'Payment ID and signature are required for verification.', 'MISSING_SIGNATURE', 400);
       }
 
-      const generatedSignature = crypto
+      const expectedSignature = crypto
         .createHmac('sha256', RAZORPAY_KEY_SECRET)
         .update(`${razorpay_order_id}|${razorpay_payment_id}`)
         .digest('hex');
 
-      if (generatedSignature !== razorpay_signature) {
-        return sendError(res, 'Invalid payment signature. Verification failed.', 'INVALID_SIGNATURE', 400);
+      const valid = expectedSignature.length === razorpay_signature.length &&
+        crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(razorpay_signature));
+
+      if (!valid) {
+        return sendError(res, 'Invalid payment signature.', 'INVALID_SIGNATURE', 400);
       }
     }
 
-    const payment = await Payment.findOneAndUpdate(
-      { razorpayOrderId: razorpay_order_id },
-      {
-        $set: {
-          razorpayPaymentId: razorpay_payment_id || 'pay_' + Date.now(),
-          razorpaySignature: razorpay_signature || '',
-          status: 'paid'
-        }
-      },
-      { new: true, upsert: true }
-    );
+    payment.status = 'paid';
+    payment.razorpayPaymentId = razorpay_payment_id || 'pay_' + Date.now();
+    payment.razorpaySignature = razorpay_signature || '';
+    await payment.save();
 
     return sendSuccess(res, {
       message: `${payment.packageName} package activated successfully!`,
@@ -1150,30 +1183,34 @@ app.post('/api/payment/verify', authMiddleware, async (req, res) => {
   }
 });
 
-// Idempotent Razorpay Webhook Handler
-app.post('/api/payment/webhook', async (req, res) => {
+// Idempotent Raw Body Razorpay Webhook Handler
+app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
+    if (!RAZORPAY_WEBHOOK_SECRET) {
+      return sendError(res, 'Payment webhook is not configured.', 'PAYMENT_NOT_CONFIGURED', 503);
+    }
+
     const signature = req.headers['x-razorpay-signature'];
     if (!signature) {
-      return sendError(res, 'x-razorpay-signature header is required.', 'MISSING_SIGNATURE', 400);
+      return sendError(res, 'Webhook signature required.', 'MISSING_SIGNATURE', 400);
     }
 
-    if (!RAZORPAY_WEBHOOK_SECRET) {
-      return sendError(res, 'Razorpay webhook secret is not configured on server.', 'SERVER_CONFIG_ERROR', 500);
-    }
-
+    const rawBody = req.body;
     const expectedSignature = crypto
       .createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
-      .update(JSON.stringify(req.body))
+      .update(rawBody)
       .digest('hex');
 
-    if (expectedSignature !== signature) {
+    const valid = expectedSignature.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature));
+
+    if (!valid) {
       return sendError(res, 'Invalid webhook signature.', 'INVALID_SIGNATURE', 400);
     }
 
-    const event = req.body.event;
-    if (event === 'payment.captured' || event === 'order.paid') {
-      const paymentEntity = req.body.payload?.payment?.entity || req.body.payload?.order?.entity;
+    const event = JSON.parse(rawBody.toString('utf8'));
+    if (event.event === 'payment.captured' || event.event === 'order.paid') {
+      const paymentEntity = event.payload?.payment?.entity || event.payload?.order?.entity;
       if (paymentEntity?.order_id) {
         await Payment.updateOne(
           { razorpayOrderId: paymentEntity.order_id },
@@ -1186,9 +1223,9 @@ app.post('/api/payment/webhook', async (req, res) => {
         );
       }
     }
-    return sendSuccess(res, { status: 'webhook_processed' });
+    return sendSuccess(res, { status: 'processed' });
   } catch (err) {
-    return sendError(res, 'Webhook error: ' + err.message, 'SERVER_ERROR', 500);
+    return sendError(res, 'Webhook processing failed: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 

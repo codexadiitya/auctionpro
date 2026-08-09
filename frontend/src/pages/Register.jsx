@@ -5,14 +5,14 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
-import { Zap, Loader2, ShieldCheck } from 'lucide-react';
+import { Zap, Loader2 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 
 export default function Register() {
   const { register } = useAuth();
   const nav = useNavigate();
   const { toast } = useToast();
-  const [form, setForm] = useState({ name:'', email:'', phone:'', password:'', role:'coordinator' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'player' });
   const [loading, setLoading] = useState(false);
 
   const submit = async (e) => {
@@ -21,12 +21,14 @@ export default function Register() {
     try {
       const u = await register(form);
       toast({ title: 'Account created!', description: `Welcome ${u.name}` });
-      nav(u.role === 'coordinator' ? '/dashboard' : '/player/profile');
+      nav('/player/profile');
     } catch (err) {
       console.error('[Register Error]', err);
-      const msg = err?.response?.data?.detail || err?.message || 'Server connection failed';
+      const msg = err.userMessage || err?.response?.data?.error?.message || 'Registration failed';
       toast({ title: 'Registration failed', description: msg, variant: 'destructive' });
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -39,8 +41,9 @@ export default function Register() {
           <div className="font-display text-2xl tracking-wider text-white">AUCTION<span className="brand-gradient-text">PRO</span></div>
         </Link>
         <h1 className="font-display text-3xl text-white text-center">CREATE ACCOUNT</h1>
-        <p className="text-white/60 text-center text-sm mt-1">Sign up as a tournament coordinator</p>
+        <p className="text-white/60 text-center text-sm mt-1">Create your AuctionPro account</p>
         <form onSubmit={submit} className="mt-6 space-y-3">
+          <input type="hidden" name="role" value="player" />
           <div>
             <Label className="text-white/70">Full Name</Label>
             <Input data-testid="register-name" required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Your name" className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-orange-500"/>
@@ -54,15 +57,8 @@ export default function Register() {
             <Input data-testid="register-phone" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="+91-..." className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-orange-500"/>
           </div>
           <div>
-            <Label className="text-white/70">Password (min 6 chars)</Label>
-            <Input data-testid="register-password" required type="password" minLength={6} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="••••••••" className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-orange-500"/>
-          </div>
-          <div>
-            <Label className="text-white/70">Role</Label>
-            <select data-testid="register-role" value={form.role} onChange={e=>setForm({...form,role:e.target.value})} className="mt-1.5 w-full h-10 rounded-md bg-white/5 border border-white/10 text-white px-3 focus-visible:ring-2 focus-visible:ring-orange-500 outline-none">
-              <option value="coordinator">Coordinator / Organizer</option>
-              <option value="player">Player</option>
-            </select>
+            <Label className="text-white/70">Password (min 8 chars)</Label>
+            <Input data-testid="register-password" required type="password" minLength={8} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="••••••••" className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-orange-500"/>
           </div>
           <Button data-testid="register-submit" disabled={loading} className="w-full h-11 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold">
             {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Creating...</> : 'Create Account'}
@@ -71,12 +67,6 @@ export default function Register() {
         <p className="text-center text-white/60 text-sm mt-6">
           Already have an account? <Link to="/login" className="text-orange-400 hover:underline">Sign in</Link>
         </p>
-
-        {/* Bot Protection Shield Indicator */}
-        <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-center gap-1.5 text-[11px] text-white/40">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400"/>
-          <span>Protected by Cloudflare Turnstile & BotShield</span>
-        </div>
       </Card>
     </div>
   );
