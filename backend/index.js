@@ -168,13 +168,13 @@ const upload = multer({
 // Magic Byte Buffer Inspection for Images
 function validateImageMagicBytes(buffer) {
   if (!buffer || buffer.length < 4) return false;
-  // JPEG: FF D8 FF
+  // JPEG
   if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return true;
-  // PNG: 89 50 4E 47
+  // PNG
   if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return true;
-  // GIF: 47 49 46 38 ("GIF8")
+  // GIF
   if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return true;
-  // WEBP: RIFF...WEBP
+  // WEBP
   if (
     buffer.length >= 12 &&
     buffer.toString('ascii', 0, 4) === 'RIFF' &&
@@ -183,15 +183,6 @@ function validateImageMagicBytes(buffer) {
 
   return false;
 }
-
-// ── MongoDB Atlas Connection ──
-mongoose.connect(MONGO_URL, {
-  maxPoolSize: 10,
-  serverSelectionTimeoutMS: 5000,
-  socketTimeoutMS: 45000,
-})
-  .then(() => console.log('✅ Connected to MongoDB Atlas Database'))
-  .catch((err) => console.error('❌ MongoDB Atlas Connection Error:', err.message));
 
 // ── Database Schemas & Models ──
 
@@ -336,7 +327,7 @@ app.get('/api/health', async (req, res) => {
 // Authentication Routes (Strict Role Escalation Protection)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, phone, role: requestedRole, admin_key } = req.body;
+    const { name, email, password, phone, role: requestedRole } = req.body;
     if (!name || !email || !password) {
       return sendError(res, 'Name, email and password are required.', 'VALIDATION_ERROR', 400);
     }
@@ -356,12 +347,7 @@ app.post('/api/auth/register', async (req, res) => {
       userRole = 'owner';
     }
     if (requestedRole === 'coordinator') {
-      const expectedAdminKey = process.env.ADMIN_REGISTRATION_KEY;
-      if (expectedAdminKey && admin_key === expectedAdminKey) {
-        userRole = 'coordinator';
-      } else {
-        return sendError(res, 'Coordinator accounts must be provisioned by an administrator.', 'FORBIDDEN', 403);
-      }
+      return sendError(res, 'Coordinator accounts must be provisioned by an administrator.', 'FORBIDDEN', 403);
     }
 
     const salt = await bcrypt.genSalt(12);
@@ -462,12 +448,18 @@ app.get('/api/auctions', async (req, res) => {
   try {
     const { mine } = req.query;
     let query = {};
-    if (mine === 'true' && req.headers.authorization) {
+    if (mine === 'true') {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return sendError(res, 'Authentication required.', 'UNAUTHORIZED', 401);
+      }
       try {
-        const token = req.headers.authorization.split(' ')[1];
+        const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, JWT_SECRET);
         query.coordinatorId = decoded.id;
-      } catch (e) {}
+      } catch (e) {
+        return sendError(res, 'Invalid or expired authentication token.', 'UNAUTHORIZED', 401);
+      }
     }
     const auctions = await Auction.find(query).sort({ createdAt: -1 });
     const formatted = auctions.map(a => ({
@@ -618,7 +610,7 @@ app.delete('/api/auctions/:id', authMiddleware, requireRole('coordinator'), asyn
   }
 });
 
-// Team Management Endpoints
+// Team Management Endpoints (Auction Ownership & Team Limit Verified)
 app.get('/api/teams', async (req, res) => {
   try {
     const { auction_id } = req.query;
@@ -646,13 +638,23 @@ app.post('/api/teams', authMiddleware, requireRole('coordinator'), async (req, r
       return sendError(res, 'Auction ID, team name, and owner name are required.', 'VALIDATION_ERROR', 400);
     }
 
+    const auction = await Auction.findOne({ _id: auction_id, coordinatorId: req.user._id });
+    if (!auction) {
+      return sendError(res, 'Auction not found or not owned by you.', 'FORBIDDEN', 403);
+    }
+
+    const teamCount = await Team.countDocuments({ auctionId: auction._id });
+    if (teamCount >= auction.maxTeams) {
+      return sendError(res, `Maximum teams limit (${auction.maxTeams}) reached for this auction.`, 'ENTITLEMENT_EXCEEDED', 403);
+    }
+
     const team = new Team({
-      auctionId: auction_id,
+      auctionId: auction._id,
       name: name.trim(),
       ownerName: owner_name.trim(),
       ownerUserId: req.user._id,
       color: color || '#FF6B00',
-      purse: purse ? Number(purse) : 5000000,
+      purse: purse ? Number(purse) : auction.budgetPerTeam,
       spent: 0
     });
     await team.save();
@@ -674,57 +676,86 @@ app.post('/api/teams', authMiddleware, requireRole('coordinator'), async (req, r
 
 app.delete('/api/teams/:id', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
-    const team = await Team.findByIdAndDelete(req.params.id);
+    const team = await Team.findById(req.params.id);
     if (!team) {
       return sendError(res, 'Team not found.', 'NOT_FOUND', 404);
     }
+
+    const auction = await Auction.findOne({ _id: team.auctionId, coordinatorId: req.user._id });
+    if (!auction) {
+      return sendError(res, 'You do not own this team.', 'FORBIDDEN', 403);
+    }
+
+    await Team.deleteOne({ _id: team._id });
     return sendSuccess(res, { message: 'Team deleted successfully.' });
   } catch (err) {
     return sendError(res, 'Failed to delete team: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// Player Management Endpoints
+// Player Management Endpoints (Auction Ownership & Public Data Isolation)
 app.get('/api/players', async (req, res) => {
   try {
     const { auction_id } = req.query;
     const query = auction_id ? { auctionId: auction_id } : {};
     const players = await Player.find(query).sort({ lotNumber: 1, createdAt: -1 });
-    const formatted = players.map(p => ({
-      id: p._id.toString(),
-      auction_id: p.auctionId.toString(),
-      name: p.name,
-      role: p.role,
-      sport: p.sport,
-      base_price: p.basePrice,
-      city: p.city,
-      phone: p.phone,
-      jersey_number: p.jerseyNumber,
-      batting_style: p.battingStyle,
-      bowling_style: p.bowlingStyle,
-      age: p.age,
-      lot_number: p.lotNumber,
-      bio: p.bio,
-      photo_url: p.photoUrl,
-      status: p.status,
-      sold_to_team_id: p.soldToTeamId ? p.soldToTeamId.toString() : null,
-      sold_price: p.soldPrice
-    }));
+
+    let isCoordinator = false;
+    if (req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        if (decoded && decoded.role === 'coordinator') isCoordinator = true;
+      } catch (e) {}
+    }
+
+    const formatted = players.map(p => {
+      const playerObj = {
+        id: p._id.toString(),
+        auction_id: p.auctionId.toString(),
+        name: p.name,
+        role: p.role,
+        sport: p.sport,
+        base_price: p.basePrice,
+        city: p.city,
+        jersey_number: p.jerseyNumber,
+        batting_style: p.battingStyle,
+        bowling_style: p.bowlingStyle,
+        age: p.age,
+        lot_number: p.lotNumber,
+        bio: p.bio,
+        photo_url: p.photoUrl,
+        status: p.status,
+        sold_to_team_id: p.soldToTeamId ? p.soldToTeamId.toString() : null,
+        sold_price: p.soldPrice
+      };
+
+      if (isCoordinator) {
+        playerObj.phone = p.phone;
+      }
+
+      return playerObj;
+    });
     return sendSuccess(res, formatted);
   } catch (err) {
     return sendError(res, 'Failed to fetch players: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-app.post('/api/players', async (req, res) => {
+app.post('/api/players', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
     const p = req.body;
     if (!p.name || !p.auction_id) {
       return sendError(res, 'Player name and target auction ID are required.', 'VALIDATION_ERROR', 400);
     }
 
+    const auction = await Auction.findOne({ _id: p.auction_id, coordinatorId: req.user._id });
+    if (!auction) {
+      return sendError(res, 'Auction not found or not owned by you.', 'FORBIDDEN', 403);
+    }
+
     const player = new Player({
-      auctionId: p.auction_id,
+      auctionId: auction._id,
       name: p.name.trim(),
       role: p.role || 'Batsman',
       sport: p.sport || 'Cricket',
@@ -766,14 +797,21 @@ app.put('/api/players/:id', authMiddleware, requireRole('coordinator'), async (r
     if (role) updateData.role = role;
     if (base_price) updateData.basePrice = Number(base_price);
 
-    const player = await Player.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    const player = await Player.findById(req.params.id);
     if (!player) {
       return sendError(res, 'Player not found.', 'NOT_FOUND', 404);
     }
+
+    const auction = await Auction.findOne({ _id: player.auctionId, coordinatorId: req.user._id });
+    if (!auction) {
+      return sendError(res, 'You do not own this auction.', 'FORBIDDEN', 403);
+    }
+
+    const updated = await Player.findByIdAndUpdate(req.params.id, updateData, { new: true });
     return sendSuccess(res, {
-      id: player._id.toString(),
-      name: player.name,
-      status: player.status
+      id: updated._id.toString(),
+      name: updated.name,
+      status: updated.status
     });
   } catch (err) {
     return sendError(res, 'Failed to update player: ' + err.message, 'SERVER_ERROR', 500);
@@ -790,13 +828,11 @@ app.post('/api/auction/next', authMiddleware, requireRole('coordinator'), async 
       return sendError(res, 'Auction ID and Player ID required.', 'VALIDATION_ERROR', 400);
     }
 
-    const [auction, player] = await Promise.all([
-      Auction.findById(auction_id),
-      Player.findById(player_id)
-    ]);
+    const auction = await Auction.findOne({ _id: auction_id, coordinatorId: req.user._id });
+    const player = await Player.findOne({ _id: player_id, auctionId: auction_id });
 
     if (!auction || !player) {
-      return sendError(res, 'Auction or player not found.', 'NOT_FOUND', 404);
+      return sendError(res, 'Auction or player not found or not owned by you.', 'NOT_FOUND', 404);
     }
 
     // Update Player & Auction state
@@ -1267,9 +1303,25 @@ io.on('connection', (socket) => {
   });
 });
 
-// ── Start Production Server ──
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 AuctionPro Production Backend running on port ${PORT}`);
-});
+// ── Fail-Fast Async Server Startup ──
+async function startServer() {
+  try {
+    await mongoose.connect(MONGO_URL, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    });
+    console.log('✅ Connected to MongoDB Atlas Database');
+
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 AuctionPro Production Backend running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('FATAL: MongoDB connection failed:', err.message);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 module.exports = app;
