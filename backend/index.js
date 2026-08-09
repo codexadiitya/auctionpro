@@ -23,18 +23,22 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-// ── Environment Configuration & Validation ──
+// ── Environment Configuration & Strict Validation ──
 const PORT = process.env.PORT || 8000;
+
+if (!process.env.MONGO_URL && process.env.NODE_ENV === 'production') {
+  throw new Error('FATAL: MONGO_URL environment variable is required in production.');
+}
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('FATAL: JWT_SECRET environment variable is required in production.');
+}
+
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
 const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-secure-production-jwt-secret-key-2026';
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_test_demo123key';
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'rzp_test_demosecret';
-const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'auctionpro_webhook_secret_key';
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || process.env.CORS_ORIGINS || 'https://auctionpro-eight.vercel.app';
-
-if (!process.env.JWT_SECRET) {
-  console.warn('⚠️ WARNING: JWT_SECRET environment variable is not set. Using default fallback for development only.');
-}
 
 // ── Security Middleware ──
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
@@ -42,6 +46,7 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
+  'http://127.0.0.1:3000',
   'https://auctionpro-eight.vercel.app',
   FRONTEND_URL
 ].filter(Boolean);
@@ -69,6 +74,12 @@ const authLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many authentication requests. Please try again in 15 minutes.' } }
 });
 
+const biddingLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 120, // max 120 bids per minute per IP
+  message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Bidding rate limit reached. Please slow down.' } }
+});
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 500,
@@ -77,23 +88,33 @@ const apiLimiter = rateLimit({
 
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
+app.use('/api/bids', biddingLimiter);
 app.use('/api/', apiLimiter);
 
-// ── Socket.IO Setup ──
+// ── Socket.IO Setup with Strict CORS Origins ──
+const socketOrigins = [
+  'https://auctionpro-eight.vercel.app',
+  FRONTEND_URL
+].filter(Boolean);
+
+if (process.env.NODE_ENV !== 'production') {
+  socketOrigins.push('http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000');
+}
+
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: socketOrigins,
     methods: ['GET', 'POST']
   }
 });
 
 // ── Razorpay SDK Client Initialization ──
 let razorpayClient = null;
-if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
   try {
     razorpayClient = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
+      key_id: RAZORPAY_KEY_ID,
+      key_secret: RAZORPAY_KEY_SECRET,
     });
     console.log('✅ Razorpay Payment SDK initialized successfully.');
   } catch (err) {
@@ -101,18 +122,19 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   }
 }
 
-// Server Package Catalog for Payments
+// Server Package Catalog & Entitlements
 const PACKAGES = {
-  'tier_free': { id: 'tier_free', name: 'Starter Package', price: 0, maxAuctions: 1, maxTeams: 4 },
+  'tier_starter': { id: 'tier_starter', name: 'Starter Package', price: 0, maxAuctions: 1, maxTeams: 4 },
   'tier_pro': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
-  'tier_enterprise': { id: 'tier_enterprise', name: 'Enterprise League Pass', price: 4999, maxAuctions: 50, maxTeams: 32 },
-  '1 Auction': { id: '1 Auction', name: '1 Auction Pass', price: 999, maxAuctions: 1, maxTeams: 8 },
-  '4 Teams': { id: '4 Teams', name: '4 Teams Package', price: 1999, maxAuctions: 3, maxTeams: 4 },
-  '8 Teams': { id: '8 Teams', name: '8 Teams Package', price: 3499, maxAuctions: 5, maxTeams: 8 },
-  'Unlimited': { id: 'Unlimited', name: 'Unlimited League Pass', price: 9999, maxAuctions: 999, maxTeams: 99 }
+  'tier_enterprise': { id: 'tier_enterprise', name: 'Enterprise Pass', price: 4999, maxAuctions: 50, maxTeams: 32 },
+  // Backward compatibility key mappings
+  '1 Auction': { id: 'tier_starter', name: 'Starter Package', price: 0, maxAuctions: 1, maxTeams: 4 },
+  '4 Teams': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
+  '8 Teams': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
+  'Unlimited': { id: 'tier_enterprise', name: 'Enterprise Pass', price: 4999, maxAuctions: 50, maxTeams: 32 }
 };
 
-// ── File Upload Configuration & Static Serving ──
+// ── File Upload Configuration & Magic Byte Verification ──
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -142,6 +164,23 @@ const upload = multer({
     cb(new Error('Invalid file format. Only JPG, PNG, WEBP, and GIF image files up to 5MB are allowed.'));
   }
 });
+
+// Magic Byte Buffer Inspection for Images
+function validateImageMagicBytes(buffer) {
+  if (!buffer || buffer.length < 4) return false;
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return true;
+  // PNG: 89 50 4E 47
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return true;
+  // GIF: 47 49 46 38 ("GIF8")
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return true;
+  // WEBP: RIFF...WEBP
+  if (buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) return true;
+
+  return false;
+}
 
 // ── MongoDB Atlas Connection ──
 mongoose.connect(MONGO_URL, {
@@ -186,6 +225,7 @@ const teamSchema = new mongoose.Schema({
   auctionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Auction', required: true, index: true },
   name: { type: String, required: true, trim: true },
   ownerName: { type: String, required: true, trim: true },
+  ownerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   color: { type: String, default: '#FF6B00' },
   purse: { type: Number, default: 5000000 },
   spent: { type: Number, default: 0 }
@@ -484,6 +524,21 @@ app.post('/api/auctions', authMiddleware, requireRole('coordinator'), async (req
       return sendError(res, 'Auction name and date are required.', 'VALIDATION_ERROR', 400);
     }
 
+    // Server Entitlement Check: Enforce max allowed auctions based on purchased package
+    const paidPayments = await Payment.find({ userId: req.user._id, status: 'paid' });
+    let maxAuctionsAllowed = 1; // Default starter entitlement
+    for (const pay of paidPayments) {
+      const pkg = PACKAGES[pay.packageId] || PACKAGES[pay.packageName];
+      if (pkg && pkg.maxAuctions > maxAuctionsAllowed) {
+        maxAuctionsAllowed = pkg.maxAuctions;
+      }
+    }
+
+    const existingAuctionsCount = await Auction.countDocuments({ coordinatorId: req.user._id });
+    if (existingAuctionsCount >= maxAuctionsAllowed) {
+      return sendError(res, `Auction limit reached. Your active tier permits up to ${maxAuctionsAllowed} auction(s). Upgrade package to create more.`, 'ENTITLEMENT_EXCEEDED', 403);
+    }
+
     const auction = new Auction({
       coordinatorId: req.user._id,
       name: name.trim(),
@@ -571,6 +626,7 @@ app.post('/api/teams', authMiddleware, requireRole('coordinator'), async (req, r
       auctionId: auction_id,
       name: name.trim(),
       ownerName: owner_name.trim(),
+      ownerUserId: req.user._id,
       color: color || '#FF6B00',
       purse: purse ? Number(purse) : 5000000,
       spent: 0
@@ -751,12 +807,17 @@ app.post('/api/auction/next', authMiddleware, requireRole('coordinator'), async 
   }
 });
 
-// Place Bid (Server-Authoritative Validation & Atomic Update)
+// Place Bid (Server-Authoritative Validation, Team Ownership & Atomic Concurrency Update)
 app.post('/api/bids', authMiddleware, async (req, res) => {
   try {
     const { auction_id, player_id, team_id, amount } = req.body;
     if (!auction_id || !player_id || !team_id || !amount) {
       return sendError(res, 'Auction ID, player ID, team ID, and bid amount are required.', 'VALIDATION_ERROR', 400);
+    }
+
+    const bidAmount = Number(amount);
+    if (isNaN(bidAmount) || bidAmount <= 0) {
+      return sendError(res, 'Bid amount must be a positive number.', 'INVALID_BID_AMOUNT', 400);
     }
 
     const [auction, player, team] = await Promise.all([
@@ -769,35 +830,61 @@ app.post('/api/bids', authMiddleware, async (req, res) => {
       return sendError(res, 'Auction, player, or team invalid.', 'NOT_FOUND', 404);
     }
 
-    // 1. Verify auction is active
-    if (auction.status !== 'live') {
-      return sendError(res, 'Auction is not currently live.', 'INVALID_STATE', 400);
+    // 1. Verify player belongs to auction and team belongs to auction
+    if (player.auctionId.toString() !== auction_id || team.auctionId.toString() !== auction_id) {
+      return sendError(res, 'Player or team does not belong to this auction.', 'CROSS_AUCTION_MISMATCH', 400);
     }
 
-    // 2. Verify team purse capacity
+    // 2. Verify bidder authorization (coordinator OR team owner)
+    const isCoordinator = auction.coordinatorId.toString() === req.user._id.toString();
+    const isTeamOwner = team.ownerUserId ? team.ownerUserId.toString() === req.user._id.toString() : false;
+    const isOwnerByName = team.ownerName && req.user.name && team.ownerName.toLowerCase().trim() === req.user.name.toLowerCase().trim();
+
+    if (!isCoordinator && !isTeamOwner && !isOwnerByName && req.user.role !== 'coordinator') {
+      return sendError(res, 'You are not authorized to place bids on behalf of this team.', 'UNAUTHORIZED_TEAM_BID', 403);
+    }
+
+    // 3. Verify auction & player status
+    if (auction.status !== 'live' || !auction.currentPlayerId || auction.currentPlayerId.toString() !== player_id) {
+      return sendError(res, 'Auction is not live or player is not the active player on the block.', 'INVALID_AUCTION_STATE', 400);
+    }
+
+    // 4. Verify team purse capacity
     const remainingPurse = team.purse - team.spent;
-    if (amount > remainingPurse) {
+    if (bidAmount > remainingPurse) {
       return sendError(res, `Insufficient team purse. Remaining balance is ₹${remainingPurse.toLocaleString('en-IN')}`, 'INSUFFICIENT_PURSE', 400);
     }
 
-    // 3. Verify bid exceeds current bid
-    if (amount <= auction.currentBid && auction.currentTeamId) {
-      return sendError(res, `Bid must be greater than current highest bid of ₹${auction.currentBid.toLocaleString('en-IN')}`, 'BID_TOO_LOW', 400);
+    // 5. Atomic Concurrency Update: only update if currentBid is less than new bid
+    const updatedAuction = await Auction.findOneAndUpdate(
+      {
+        _id: auction_id,
+        status: 'live',
+        currentPlayerId: player_id,
+        $or: [
+          { currentBid: { $lt: bidAmount } },
+          { currentTeamId: null }
+        ]
+      },
+      {
+        $set: { currentBid: bidAmount, currentTeamId: team._id }
+      },
+      { new: true }
+    );
+
+    if (!updatedAuction) {
+      return sendError(res, 'Bid rejected: a higher or concurrent bid was already processed.', 'BID_OUTDATED', 400);
     }
 
-    // Atomically save bid and update auction state
+    // Save Bid record
     const bid = new Bid({
       auctionId: auction._id,
       playerId: player._id,
       teamId: team._id,
-      amount: Number(amount),
+      amount: bidAmount,
       bidderUserId: req.user._id
     });
     await bid.save();
-
-    auction.currentBid = Number(amount);
-    auction.currentTeamId = team._id;
-    await auction.save();
 
     const teamFormatted = {
       id: team._id.toString(),
@@ -810,7 +897,7 @@ app.post('/api/bids', authMiddleware, async (req, res) => {
 
     // Broadcast Socket.IO Event
     io.to(auction_id).emit('bid', {
-      bid: { id: bid._id.toString(), amount: Number(amount) },
+      bid: { id: bid._id.toString(), amount: bidAmount },
       team: teamFormatted,
       player_id: player._id.toString()
     });
@@ -821,7 +908,7 @@ app.post('/api/bids', authMiddleware, async (req, res) => {
   }
 });
 
-// Mark Player Sold (Atomic Purse Deduction & Status Update)
+// Mark Player Sold (Atomic Transaction-Safe Purse Deduction & Duplicate Sale Rejection)
 app.post('/api/auction/sold', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
     const { auction_id, player_id, team_id, price } = req.body;
@@ -831,17 +918,21 @@ app.post('/api/auction/sold', authMiddleware, requireRole('coordinator'), async 
 
     const soldPrice = Number(price);
 
+    // Atomic Check: Player must be 'live' to be sold
+    const player = await Player.findOneAndUpdate(
+      { _id: player_id, status: 'live' },
+      { $set: { status: 'sold', soldToTeamId: team_id, soldPrice: soldPrice } },
+      { new: true }
+    );
+
+    if (!player) {
+      return sendError(res, 'Cannot sell player: player is not active or has already been sold/unsold.', 'INVALID_PLAYER_STATE', 409);
+    }
+
     // Atomic Team Purse Deduction
     const team = await Team.findByIdAndUpdate(
       team_id,
       { $inc: { spent: soldPrice } },
-      { new: true }
-    );
-
-    // Atomic Player Sold Update
-    const player = await Player.findByIdAndUpdate(
-      player_id,
-      { $set: { status: 'sold', soldToTeamId: team_id, soldPrice: soldPrice } },
       { new: true }
     );
 
@@ -886,11 +977,15 @@ app.post('/api/auction/unsold', authMiddleware, requireRole('coordinator'), asyn
       return sendError(res, 'Auction ID and player ID required.', 'VALIDATION_ERROR', 400);
     }
 
-    const player = await Player.findByIdAndUpdate(
-      player_id,
+    const player = await Player.findOneAndUpdate(
+      { _id: player_id, status: 'live' },
       { $set: { status: 'unsold' } },
       { new: true }
     );
+
+    if (!player) {
+      return sendError(res, 'Cannot mark unsold: player is not in active live state.', 'INVALID_PLAYER_STATE', 409);
+    }
 
     await Auction.findByIdAndUpdate(auction_id, {
       $set: { currentPlayerId: null, currentBid: 0, currentTeamId: null }
@@ -911,7 +1006,7 @@ app.post('/api/auction/unsold', authMiddleware, requireRole('coordinator'), asyn
   }
 });
 
-// File Upload Endpoint
+// File Upload Endpoint with Magic Byte Inspection
 const handleUpload = (req, res) => {
   upload.single('file')(req, res, (err) => {
     if (err instanceof multer.MulterError) {
@@ -922,6 +1017,18 @@ const handleUpload = (req, res) => {
     if (!req.file) {
       return sendError(res, 'No file uploaded.', 'NO_FILE', 400);
     }
+
+    // Inspect Magic Bytes of uploaded file
+    try {
+      const buffer = fs.readFileSync(req.file.path);
+      if (!validateImageMagicBytes(buffer)) {
+        fs.unlinkSync(req.file.path); // Delete invalid file immediately
+        return sendError(res, 'Invalid image file content. File failed magic byte verification.', 'INVALID_FILE_CONTENT', 400);
+      }
+    } catch (e) {
+      return sendError(res, 'File content verification failed.', 'FILE_VERIFICATION_ERROR', 400);
+    }
+
     const fileUrl = `/static/uploads/${req.file.filename}`;
     return sendSuccess(res, { url: fileUrl, filename: req.file.filename });
   });
@@ -935,13 +1042,13 @@ app.post('/api/uploads/image', authMiddleware, handleUpload);
 app.post('/api/checkout', authMiddleware, async (req, res) => {
   try {
     const { package_id, package_name } = req.body;
-    const pkgKey = package_id || package_name || '1 Auction';
-    const pkg = PACKAGES[pkgKey] || PACKAGES['1 Auction'];
+    const pkgKey = package_id || package_name || 'tier_starter';
+    const pkg = PACKAGES[pkgKey] || PACKAGES['tier_starter'];
 
     const amountInPaisa = Math.round(pkg.price * 100);
 
     let orderId = `order_sim_${Date.now()}`;
-    if (razorpayClient && pkg.price > 0 && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.includes('demo')) {
+    if (razorpayClient && pkg.price > 0 && RAZORPAY_KEY_ID && !RAZORPAY_KEY_ID.includes('demo')) {
       try {
         const order = await razorpayClient.orders.create({
           amount: amountInPaisa,
@@ -966,7 +1073,7 @@ app.post('/api/checkout', authMiddleware, async (req, res) => {
 
     return sendSuccess(res, {
       order_id: orderId,
-      key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_demo123key',
+      key_id: RAZORPAY_KEY_ID || 'rzp_test_demo123key',
       amount: amountInPaisa,
       currency: 'INR',
       package_name: pkg.name
@@ -985,14 +1092,18 @@ app.post('/api/payment/verify', authMiddleware, async (req, res) => {
     }
 
     // Cryptographic Signature Verification
-    if (razorpay_signature && process.env.RAZORPAY_KEY_SECRET) {
+    if (RAZORPAY_KEY_SECRET) {
+      if (!razorpay_signature) {
+        return sendError(res, 'Payment signature is required for verification.', 'MISSING_SIGNATURE', 400);
+      }
+
       const generatedSignature = crypto
-        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .createHmac('sha256', RAZORPAY_KEY_SECRET)
         .update(`${razorpay_order_id}|${razorpay_payment_id}`)
         .digest('hex');
 
       if (generatedSignature !== razorpay_signature) {
-        return sendError(res, 'Invalid payment signature verification failed.', 'INVALID_SIGNATURE', 400);
+        return sendError(res, 'Invalid payment signature. Verification failed.', 'INVALID_SIGNATURE', 400);
       }
     }
 
@@ -1021,15 +1132,21 @@ app.post('/api/payment/verify', authMiddleware, async (req, res) => {
 app.post('/api/payment/webhook', async (req, res) => {
   try {
     const signature = req.headers['x-razorpay-signature'];
-    if (signature && process.env.RAZORPAY_WEBHOOK_SECRET) {
-      const expectedSignature = crypto
-        .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
-        .update(JSON.stringify(req.body))
-        .digest('hex');
+    if (!signature) {
+      return sendError(res, 'x-razorpay-signature header is required.', 'MISSING_SIGNATURE', 400);
+    }
 
-      if (expectedSignature !== signature) {
-        return sendError(res, 'Invalid webhook signature.', 'INVALID_SIGNATURE', 400);
-      }
+    if (!RAZORPAY_WEBHOOK_SECRET) {
+      return sendError(res, 'Razorpay webhook secret is not configured on server.', 'SERVER_CONFIG_ERROR', 500);
+    }
+
+    const expectedSignature = crypto
+      .createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
+
+    if (expectedSignature !== signature) {
+      return sendError(res, 'Invalid webhook signature.', 'INVALID_SIGNATURE', 400);
     }
 
     const event = req.body.event;
