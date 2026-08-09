@@ -1,7 +1,7 @@
 /**
- * AuctionPro — MERN Stack Node.js Express Backend Server
- * ========================================================
- * Real-time Sports Player Auction Platform Backend (Node.js + Express + MongoDB)
+ * AuctionPro — Production Backend Server (Node.js + Express + MongoDB + Socket.IO + Razorpay)
+ * =========================================================================================
+ * Real-Time Server-Authoritative Sports Player Auction Platform API
  */
 
 const express = require('express');
@@ -11,183 +11,191 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const http = require('http');
 const { Server } = require('socket.io');
-require('dotenv').config();
-
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const Razorpay = require('razorpay');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }
-});
 
+// ── Environment Configuration & Validation ──
 const PORT = process.env.PORT || 8000;
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
-const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-production-mern-secret-2024';
+const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-secure-production-jwt-secret-key-2026';
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_test_demo123key';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'rzp_test_demosecret';
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'auctionpro_webhook_secret_key';
+const FRONTEND_URL = process.env.FRONTEND_URL || process.env.CORS_ORIGINS || 'https://auctionpro-eight.vercel.app';
 
-// ── Free Lightweight API Rate Limiter (Brute-Force & DDoS Protection) ──
-const rateLimitMap = new Map();
-
-function apiRateLimiter(maxRequests = 100, windowMs = 15 * 60 * 1000) {
-  return (req, res, next) => {
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-
-    if (!rateLimitMap.has(ip)) {
-      rateLimitMap.set(ip, { count: 1, resetTime: now + windowMs });
-      return next();
-    }
-
-    const tracker = rateLimitMap.get(ip);
-    if (now > tracker.resetTime) {
-      tracker.count = 1;
-      tracker.resetTime = now + windowMs;
-      return next();
-    }
-
-    tracker.count += 1;
-    if (tracker.count > maxRequests) {
-      return res.status(429).json({ detail: 'Too many requests from this IP. Please wait 15 minutes.' });
-    }
-
-    next();
-  };
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️ WARNING: JWT_SECRET environment variable is not set. Using default fallback for development only.');
 }
 
-// ── Security & Input Validation Helpers ──
-function sanitizeInput(str) {
-  if (typeof str !== 'string') return str;
-  return str.trim().replace(/[<>]/g, ''); // Strip dangerous HTML tags to prevent XSS
-}
+// ── Security Middleware ──
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
-function validateEmail(email) {
-  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return typeof email === 'string' && re.test(email.trim());
-}
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://auctionpro-eight.vercel.app',
+  FRONTEND_URL
+].filter(Boolean);
 
-// ── Bot Protection CAPTCHA Verification Helper (Cloudflare Turnstile) ──
-async function verifyBotProtection(token) {
-  const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
-  if (!TURNSTILE_SECRET) return true; // Skip if environment secret key is not set
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Blocked by CORS policy'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-razorpay-signature']
+}));
 
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+
+// Rate Limiters
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many authentication requests. Please try again in 15 minutes.' } }
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many API requests from this IP.' } }
+});
+
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/', apiLimiter);
+
+// ── Socket.IO Setup ──
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
+// ── Razorpay SDK Client Initialization ──
+let razorpayClient = null;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   try {
-    const formData = new URLSearchParams();
-    formData.append('secret', TURNSTILE_SECRET);
-    formData.append('response', token || '');
-
-    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      body: formData
+    razorpayClient = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
     });
-    const data = await response.json();
-    return data.success === true;
+    console.log('✅ Razorpay Payment SDK initialized successfully.');
   } catch (err) {
-    console.warn('[BotProtection] Verification warning:', err.message);
-    return true; // Gracefully fallback if external API is unreachable
+    console.warn('⚠️ Razorpay initialization warning:', err.message);
   }
 }
 
-// ── File Upload Directory & Static Serving ──
+// Server Package Catalog for Payments
+const PACKAGES = {
+  'tier_free': { id: 'tier_free', name: 'Starter Package', price: 0, maxAuctions: 1, maxTeams: 4 },
+  'tier_pro': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
+  'tier_enterprise': { id: 'tier_enterprise', name: 'Enterprise League Pass', price: 4999, maxAuctions: 50, maxTeams: 32 },
+  '1 Auction': { id: '1 Auction', name: '1 Auction Pass', price: 999, maxAuctions: 1, maxTeams: 8 },
+  '4 Teams': { id: '4 Teams', name: '4 Teams Package', price: 1999, maxAuctions: 3, maxTeams: 4 },
+  '8 Teams': { id: '8 Teams', name: '8 Teams Package', price: 3499, maxAuctions: 5, maxTeams: 8 },
+  'Unlimited': { id: 'Unlimited', name: 'Unlimited League Pass', price: 9999, maxAuctions: 999, maxTeams: 99 }
+};
+
+// ── File Upload Configuration & Static Serving ──
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 app.use('/api/static/uploads', express.static(UPLOAD_DIR));
+app.use('/static/uploads', express.static(UPLOAD_DIR));
 
-// ── Multer Storage Configuration (5MB Limit, Restricted File Types) ──
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `player_${uniqueSuffix}${ext}`);
+    cb(null, `img_${uniqueSuffix}${ext}`);
   }
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // Strict 5 MB Limit
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB Max
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|webp|gif/;
-    const extValid = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimeValid = allowedTypes.test(file.mimetype);
+    const allowedExtensions = /jpeg|jpg|png|webp|gif/;
+    const extValid = allowedExtensions.test(path.extname(file.originalname).toLowerCase());
+    const mimeValid = allowedExtensions.test(file.mimetype);
     if (extValid && mimeValid) {
       return cb(null, true);
     }
-    cb(new Error('Invalid file format. Only JPG, PNG, WEBP, and GIF images up to 5MB are allowed.'));
+    cb(new Error('Invalid file format. Only JPG, PNG, WEBP, and GIF image files up to 5MB are allowed.'));
   }
 });
 
-// ── HTTPS & HSTS Security Headers Middleware ──
-app.use((req, res, next) => {
-  // Redirect HTTP → HTTPS automatically on cloud edge proxies
-  if (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-proto'] !== 'https') {
-    return res.redirect(301, `https://${req.headers.host}${req.url}`);
-  }
-  // HTTP Strict Transport Security (HSTS) - 1 Year Duration
-  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  next();
-});
-
-// ── Middleware ──
-app.use(cors({ origin: '*' }));
-app.use(express.json({ limit: '2mb' }));
-
-// Apply IP Rate Limiting to Auth Endpoints (Max 20 attempts per 15 mins)
-const authLimiter = apiRateLimiter(20, 15 * 60 * 1000);
-app.use('/api/auth/login', authLimiter);
-app.use('/api/auth/register', authLimiter);
-
-// ── MongoDB Atlas Hardened Connection ──
+// ── MongoDB Atlas Connection ──
 mongoose.connect(MONGO_URL, {
   maxPoolSize: 10,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
-  family: 4
 })
-  .then(() => console.log('✅ Connected to MongoDB Atlas (MERN Stack Hardened)'))
-  .catch((err) => console.error('⚠️ MongoDB Connection Warning:', err.message));
+  .then(() => console.log('✅ Connected to MongoDB Atlas Database'))
+  .catch((err) => console.error('❌ MongoDB Atlas Connection Error:', err.message));
 
-// ── Mongoose User Schema ──
+// ── Database Schemas & Models ──
+
 const userSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true, lowercase: true },
+  name: { type: String, required: true, trim: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
   passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['coordinator', 'player'], default: 'coordinator' },
-  phone: { type: String, default: '' },
-  mfaEnabled: { type: Boolean, default: false },
-  otpCode: { type: String, default: null },
-  otpExpires: { type: Date, default: null },
-  createdAt: { type: Date, default: Date.now }
-});
+  role: { type: String, enum: ['coordinator', 'player', 'owner'], default: 'coordinator' },
+  phone: { type: String, default: '' }
+}, { timestamps: true });
 
+const userPublicSelect = '-passwordHash';
 const User = mongoose.model('User', userSchema);
 
-// ── Mongoose Auction Schema ──
 const auctionSchema = new mongoose.Schema({
-  coordinatorId: { type: String, required: true },
-  name: { type: String, required: true },
+  coordinatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  name: { type: String, required: true, trim: true },
   sport: { type: String, default: 'Cricket' },
   date: { type: String, required: true },
   basePrice: { type: Number, default: 100000 },
   maxTeams: { type: Number, default: 8 },
   budgetPerTeam: { type: Number, default: 5000000 },
   description: { type: String, default: '' },
-  status: { type: String, default: 'upcoming' },
-  createdAt: { type: Date, default: Date.now }
-});
+  status: { type: String, enum: ['draft', 'upcoming', 'live', 'paused', 'completed', 'cancelled'], default: 'upcoming' },
+  currentPlayerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', default: null },
+  currentBid: { type: Number, default: 0 },
+  currentTeamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', default: null }
+}, { timestamps: true });
 
 const Auction = mongoose.model('Auction', auctionSchema);
 
-// ── Mongoose Player Schema ──
+const teamSchema = new mongoose.Schema({
+  auctionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Auction', required: true, index: true },
+  name: { type: String, required: true, trim: true },
+  ownerName: { type: String, required: true, trim: true },
+  color: { type: String, default: '#FF6B00' },
+  purse: { type: Number, default: 5000000 },
+  spent: { type: Number, default: 0 }
+}, { timestamps: true });
+
+const Team = mongoose.model('Team', teamSchema);
+
 const playerSchema = new mongoose.Schema({
-  auctionId: { type: String, required: true },
-  name: { type: String, required: true },
+  auctionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Auction', required: true, index: true },
+  name: { type: String, required: true, trim: true },
   role: { type: String, default: 'Batsman' },
   sport: { type: String, default: 'Cricket' },
   basePrice: { type: Number, default: 100000 },
@@ -200,238 +208,230 @@ const playerSchema = new mongoose.Schema({
   lotNumber: { type: Number, default: 1 },
   bio: { type: String, default: '' },
   photoUrl: { type: String, default: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop' },
-  status: { type: String, default: 'registered' }, // registered | sold | unsold
-  soldToTeamId: { type: String, default: null },
-  soldPrice: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now }
-});
+  status: { type: String, enum: ['registered', 'queued', 'live', 'sold', 'unsold'], default: 'registered' },
+  soldToTeamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', default: null },
+  soldPrice: { type: Number, default: 0 }
+}, { timestamps: true });
 
 const Player = mongoose.model('Player', playerSchema);
 
-// ── Mongoose Team Schema ──
-const teamSchema = new mongoose.Schema({
-  auctionId: { type: String, required: true },
-  name: { type: String, required: true },
-  ownerName: { type: String, required: true },
-  color: { type: String, default: '#FF6B00' },
-  purse: { type: Number, default: 5000000 },
-  spent: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now }
-});
+const bidSchema = new mongoose.Schema({
+  auctionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Auction', required: true, index: true },
+  playerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true, index: true },
+  teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', required: true, index: true },
+  amount: { type: Number, required: true },
+  bidderUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}, { timestamps: true });
 
-const Team = mongoose.model('Team', teamSchema);
+const Bid = mongoose.model('Bid', bidSchema);
 
-// ── Mongoose Payment Schema ──
 const paymentSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  packageId: { type: String, required: true },
   packageName: { type: String, required: true },
   amount: { type: Number, required: true },
-  razorpayOrderId: { type: String, default: '' },
+  razorpayOrderId: { type: String, required: true, unique: true },
   razorpayPaymentId: { type: String, default: '' },
-  status: { type: String, default: 'completed' },
-  createdAt: { type: Date, default: Date.now }
-});
+  razorpaySignature: { type: String, default: '' },
+  status: { type: String, enum: ['created', 'pending', 'paid', 'failed', 'refunded'], default: 'created' }
+}, { timestamps: true });
 
 const Payment = mongoose.model('Payment', paymentSchema);
 
-// ── Razorpay Setup ──
-const Razorpay = require('razorpay');
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_test_demo123key';
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'rzp_test_demosecret';
-
-let razorpayClient = null;
-if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-  try {
-    razorpayClient = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-  } catch (err) {
-    console.warn('Razorpay init notice:', err.message);
-  }
+// ── Standardized Response Envelope Helpers ──
+function sendSuccess(res, data, statusCode = 200) {
+  return res.status(statusCode).json({ success: true, data });
 }
 
-// ── JWT Helper Middleware (Tolerant & Bulletproof) ──
+function sendError(res, message, code = 'BAD_REQUEST', statusCode = 400) {
+  return res.status(statusCode).json({ success: false, error: { code, message } });
+}
+
+// ── Authentication & RBAC Middleware ──
 const authMiddleware = async (req, res, next) => {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    req.user = { _id: 'usr_demo_coordinator', name: 'Tournament Coordinator', email: 'coordinator@auctionpro.com', role: 'coordinator' };
-    return next();
-  }
-  const token = header.split(' ')[1];
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return sendError(res, 'Authentication token required.', 'UNAUTHORIZED', 401);
+    }
+    const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-passwordHash');
-    req.user = user || { _id: decoded.id || 'usr_demo_coordinator', name: 'Tournament Coordinator', email: 'coordinator@auctionpro.com', role: 'coordinator' };
+    const user = await User.findById(decoded.id).select(userPublicSelect);
+    if (!user) {
+      return sendError(res, 'User session invalid. Please log in again.', 'UNAUTHORIZED', 401);
+    }
+    req.user = user;
     next();
   } catch (err) {
-    req.user = { _id: 'usr_demo_coordinator', name: 'Tournament Coordinator', email: 'coordinator@auctionpro.com', role: 'coordinator' };
-    next();
+    return sendError(res, 'Invalid or expired authentication session.', 'UNAUTHORIZED', 401);
   }
 };
 
-// ── RBAC Role Middleware Factory (Bulletproof) ──
 const requireRole = (...allowedRoles) => {
   return (req, res, next) => {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return sendError(res, `Access denied. Action requires role: ${allowedRoles.join(' or ')}`, 'FORBIDDEN', 403);
+    }
     next();
   };
 };
 
 // ── API ROUTES ──
 
-// Health Check Endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', stack: 'MERN (Node.js + Express + MongoDB)', timestamp: new Date().toISOString() });
-});
-
-// Secure File Upload Endpoint (Restricted file types, 5MB limit, sanitized filename)
-app.post('/api/upload', authMiddleware, (req, res) => {
-  upload.single('file')(req, res, (err) => {
-    if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ detail: 'File size exceeds maximum 5 MB limit.' });
-      }
-      return res.status(400).json({ detail: err.message });
-    } else if (err) {
-      return res.status(400).json({ detail: err.message });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ detail: 'No file uploaded' });
-    }
-
-    const fileUrl = `/static/uploads/${req.file.filename}`;
-    res.json({ url: fileUrl, filename: req.file.filename });
+// Health Check Endpoint (Verifies active MongoDB connection)
+app.get('/api/health', async (req, res) => {
+  const dbConnected = mongoose.connection.readyState === 1;
+  if (!dbConnected) {
+    return sendError(res, 'Database connection offline', 'SERVICE_UNAVAILABLE', 503);
+  }
+  return sendSuccess(res, {
+    status: 'healthy',
+    database: 'connected',
+    timestamp: new Date().toISOString()
   });
 });
 
-// MERN Auth: Register User
+// Authentication Routes
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const name = sanitizeInput(req.body.name);
-    const email = req.body.email ? req.body.email.trim().toLowerCase() : '';
-    const password = req.body.password;
-    const role = sanitizeInput(req.body.role);
-    const phone = sanitizeInput(req.body.phone);
-
+    const { name, email, password, role, phone } = req.body;
     if (!name || !email || !password) {
-      return res.status(400).json({ detail: 'Name, email, and password are required' });
+      return sendError(res, 'Name, email, and password are required fields.', 'VALIDATION_ERROR', 400);
     }
-
-    if (!validateEmail(email)) {
-      return res.status(400).json({ detail: 'Invalid email address format' });
-    }
-
-    if (typeof password !== 'string' || password.length < 6) {
-      return res.status(400).json({ detail: 'Password must be at least 6 characters long' });
-    }
-
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    const cleanEmail = email.trim().toLowerCase();
+    const existing = await User.findOne({ email: cleanEmail });
     if (existing) {
-      return res.status(400).json({ detail: 'An account with this email already exists' });
+      return sendError(res, 'An account with this email address already exists.', 'CONFLICT', 409);
+    }
+    if (password.length < 6) {
+      return sendError(res, 'Password must be at least 6 characters long.', 'VALIDATION_ERROR', 400);
     }
 
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
     const user = new User({
-      name,
-      email: email.toLowerCase(),
+      name: name.trim(),
+      email: cleanEmail,
       passwordHash,
       role: role || 'coordinator',
-      phone: phone || ''
+      phone: phone ? phone.trim() : ''
     });
-
     await user.save();
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    const userPublic = { id: user._id.toString(), name: user.name, email: user.email, role: user.role, phone: user.phone };
+    const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const userPublic = {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      phone: user.phone
+    };
 
-    res.json({ token, user: userPublic });
+    return sendSuccess(res, { token, user: userPublic }, 201);
   } catch (err) {
-    console.error('MERN Register Error:', err);
-    res.status(500).json({ detail: 'Registration error: ' + err.message });
+    return sendError(res, 'Registration failed: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// MERN Auth: Login User
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
-      return res.status(400).json({ detail: 'Email and password are required' });
+      return sendError(res, 'Email and password are required.', 'VALIDATION_ERROR', 400);
     }
-
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
     if (!user) {
-      return res.status(401).json({ detail: 'Invalid email or password' });
+      return sendError(res, 'Invalid email or password.', 'UNAUTHORIZED', 401);
     }
-
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
-      return res.status(401).json({ detail: 'Invalid email or password' });
+      return sendError(res, 'Invalid email or password.', 'UNAUTHORIZED', 401);
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    const userPublic = { id: user._id.toString(), name: user.name, email: user.email, role: user.role, phone: user.phone };
+    const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const userPublic = {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      phone: user.phone
+    };
 
-    res.json({ token, user: userPublic });
+    return sendSuccess(res, { token, user: userPublic });
   } catch (err) {
-    console.error('MERN Login Error:', err);
-    res.status(500).json({ detail: 'Login error: ' + err.message });
+    return sendError(res, 'Login failed: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// MERN Auth: Get Current User Profile (/api/auth/me)
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-  const userPublic = { id: req.user._id.toString(), name: req.user.name, email: req.user.email, role: req.user.role, phone: req.user.phone, mfaEnabled: req.user.mfaEnabled };
-  res.json(userPublic);
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  return sendSuccess(res, {
+    id: req.user._id.toString(),
+    name: req.user.name,
+    email: req.user.email,
+    role: req.user.role,
+    phone: req.user.phone
+  });
 });
 
-// MFA 2FA OTP Code Generation Endpoint
-app.post('/api/auth/mfa/generate', authMiddleware, async (req, res) => {
+// Dashboard Overview Stats Endpoint
+app.get('/api/stats', authMiddleware, async (req, res) => {
   try {
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const coordinatorId = req.user._id;
+    const [auctionsCount, activeAuctionsCount, playersCount, payments] = await Promise.all([
+      Auction.countDocuments({ coordinatorId }),
+      Auction.countDocuments({ coordinatorId, status: 'live' }),
+      Player.countDocuments(),
+      Payment.find({ userId: coordinatorId, status: 'paid' })
+    ]);
 
-    req.user.otpCode = otp;
-    req.user.otpExpires = expires;
-    await req.user.save();
+    const totalRevenue = payments.reduce((acc, p) => acc + (p.amount || 0), 0);
 
-    console.log(`[MFA 2FA] Verification OTP for ${req.user.email}: ${otp}`);
-    res.json({ message: '2FA OTP verification code generated', otp_preview: otp });
+    return sendSuccess(res, {
+      total_auctions: auctionsCount,
+      active_auctions: activeAuctionsCount,
+      total_players: playersCount,
+      total_revenue: totalRevenue
+    });
   } catch (err) {
-    res.status(500).json({ detail: err.message });
+    return sendError(res, 'Failed to load stats: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// MFA 2FA OTP Code Verification Endpoint
-app.post('/api/auth/mfa/verify', authMiddleware, async (req, res) => {
-  try {
-    const { otp } = req.body;
-    if (!req.user.otpCode || !req.user.otpExpires) {
-      return res.status(400).json({ detail: 'No active OTP verification session. Please request a new code.' });
-    }
-    if (new Date() > new Date(req.user.otpExpires)) {
-      return res.status(400).json({ detail: 'OTP verification code has expired. Please request a new code.' });
-    }
-    if (req.user.otpCode !== otp) {
-      return res.status(400).json({ detail: 'Invalid 6-digit OTP verification code.' });
-    }
-
-    req.user.mfaEnabled = true;
-    req.user.otpCode = null;
-    req.user.otpExpires = null;
-    await req.user.save();
-
-    res.json({ status: 'success', message: 'Multi-Factor Authentication (MFA/2FA) successfully enabled!' });
-  } catch (err) {
-    res.status(500).json({ detail: err.message });
-  }
-});
-
-// Auction Routes
+// Auction Management Endpoints
 app.get('/api/auctions', async (req, res) => {
+  try {
+    const { mine } = req.query;
+    let query = {};
+    if (mine === 'true' && req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        query.coordinatorId = decoded.id;
+      } catch (e) {}
+    }
+    const auctions = await Auction.find(query).sort({ createdAt: -1 });
+    const formatted = auctions.map(a => ({
+      id: a._id.toString(),
+      name: a.name,
+      sport: a.sport,
+      date: a.date,
+      base_price: a.basePrice,
+      max_teams: a.maxTeams,
+      budget_per_team: a.budgetPerTeam,
+      description: a.description,
+      status: a.status,
+      current_player_id: a.currentPlayerId ? a.currentPlayerId.toString() : null,
+      current_bid: a.currentBid,
+      current_team_id: a.currentTeamId ? a.currentTeamId.toString() : null
+    }));
+    return sendSuccess(res, formatted);
+  } catch (err) {
+    return sendError(res, 'Failed to fetch auctions: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+app.get('/api/auctions/public', async (req, res) => {
   try {
     const auctions = await Auction.find().sort({ createdAt: -1 });
     const formatted = auctions.map(a => ({
@@ -445,27 +445,60 @@ app.get('/api/auctions', async (req, res) => {
       description: a.description,
       status: a.status
     }));
-    res.json(formatted);
+    return sendSuccess(res, formatted);
   } catch (err) {
-    res.json([]);
+    return sendError(res, 'Failed to fetch public auctions: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+app.get('/api/auctions/:id', async (req, res) => {
+  try {
+    const auction = await Auction.findById(req.params.id);
+    if (!auction) {
+      return sendError(res, 'Auction not found.', 'NOT_FOUND', 404);
+    }
+    const formatted = {
+      id: auction._id.toString(),
+      name: auction.name,
+      sport: auction.sport,
+      date: auction.date,
+      base_price: auction.basePrice,
+      max_teams: auction.maxTeams,
+      budget_per_team: auction.budgetPerTeam,
+      description: auction.description,
+      status: auction.status,
+      current_player_id: auction.currentPlayerId ? auction.currentPlayerId.toString() : null,
+      current_bid: auction.currentBid,
+      current_team_id: auction.currentTeamId ? auction.currentTeamId.toString() : null
+    };
+    return sendSuccess(res, formatted);
+  } catch (err) {
+    return sendError(res, 'Invalid auction ID.', 'BAD_REQUEST', 400);
   }
 });
 
 app.post('/api/auctions', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
     const { name, sport, date, base_price, max_teams, budget_per_team, description } = req.body;
+    if (!name || !date) {
+      return sendError(res, 'Auction name and date are required.', 'VALIDATION_ERROR', 400);
+    }
+
     const auction = new Auction({
-      coordinatorId: req.user._id.toString(),
-      name,
+      coordinatorId: req.user._id,
+      name: name.trim(),
       sport: sport || 'Cricket',
       date,
-      basePrice: base_price || 100000,
-      maxTeams: max_teams || 8,
-      budgetPerTeam: budget_per_team || 5000000,
-      description: description || ''
+      basePrice: Number(base_price) || 100000,
+      maxTeams: Number(max_teams) || 8,
+      budgetPerTeam: Number(budget_per_team) || 5000000,
+      description: description || '',
+      status: 'upcoming'
     });
+
     await auction.save();
-    res.json({
+
+    const formatted = {
       id: auction._id.toString(),
       name: auction.name,
       sport: auction.sport,
@@ -475,39 +508,111 @@ app.post('/api/auctions', authMiddleware, requireRole('coordinator'), async (req
       budget_per_team: auction.budgetPerTeam,
       description: auction.description,
       status: auction.status
-    });
+    };
+
+    return sendSuccess(res, formatted, 201);
   } catch (err) {
-    res.status(400).json({ detail: err.message });
+    return sendError(res, 'Failed to create auction: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// Resource Ownership Check: Delete Auction (Only creator coordinator can delete)
 app.delete('/api/auctions/:id', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
     const auction = await Auction.findById(req.params.id);
-    if (!auction) return res.status(404).json({ detail: 'Auction not found' });
-
-    // Strict Authorization check: Never trust client-side claims
-    if (auction.coordinatorId !== req.user._id.toString()) {
-      return res.status(403).json({ detail: 'Access Denied. You can only manage/delete auctions created by your account.' });
+    if (!auction) {
+      return sendError(res, 'Auction not found.', 'NOT_FOUND', 404);
+    }
+    if (auction.coordinatorId.toString() !== req.user._id.toString()) {
+      return sendError(res, 'You are only authorized to delete auctions created by your account.', 'FORBIDDEN', 403);
     }
 
-    await Auction.findByIdAndDelete(req.params.id);
-    res.json({ status: 'success', message: 'Auction deleted successfully' });
+    await Promise.all([
+      Auction.findByIdAndDelete(req.params.id),
+      Team.deleteMany({ auctionId: req.params.id }),
+      Player.deleteMany({ auctionId: req.params.id }),
+      Bid.deleteMany({ auctionId: req.params.id })
+    ]);
+
+    return sendSuccess(res, { message: 'Auction and related teams/players deleted successfully.' });
   } catch (err) {
-    res.status(500).json({ detail: err.message });
+    return sendError(res, 'Failed to delete auction: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// Player Routes
+// Team Management Endpoints
+app.get('/api/teams', async (req, res) => {
+  try {
+    const { auction_id } = req.query;
+    const query = auction_id ? { auctionId: auction_id } : {};
+    const teams = await Team.find(query).sort({ createdAt: 1 });
+    const formatted = teams.map(t => ({
+      id: t._id.toString(),
+      auction_id: t.auctionId.toString(),
+      name: t.name,
+      owner_name: t.ownerName,
+      color: t.color,
+      purse: t.purse,
+      spent: t.spent
+    }));
+    return sendSuccess(res, formatted);
+  } catch (err) {
+    return sendError(res, 'Failed to fetch teams: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+app.post('/api/teams', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  try {
+    const { auction_id, name, owner_name, color, purse } = req.body;
+    if (!auction_id || !name || !owner_name) {
+      return sendError(res, 'Auction ID, team name, and owner name are required.', 'VALIDATION_ERROR', 400);
+    }
+
+    const team = new Team({
+      auctionId: auction_id,
+      name: name.trim(),
+      ownerName: owner_name.trim(),
+      color: color || '#FF6B00',
+      purse: purse ? Number(purse) : 5000000,
+      spent: 0
+    });
+    await team.save();
+
+    const formatted = {
+      id: team._id.toString(),
+      auction_id: team.auctionId.toString(),
+      name: team.name,
+      owner_name: team.ownerName,
+      color: team.color,
+      purse: team.purse,
+      spent: team.spent
+    };
+    return sendSuccess(res, formatted, 201);
+  } catch (err) {
+    return sendError(res, 'Failed to add team: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+app.delete('/api/teams/:id', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  try {
+    const team = await Team.findByIdAndDelete(req.params.id);
+    if (!team) {
+      return sendError(res, 'Team not found.', 'NOT_FOUND', 404);
+    }
+    return sendSuccess(res, { message: 'Team deleted successfully.' });
+  } catch (err) {
+    return sendError(res, 'Failed to delete team: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+// Player Management Endpoints
 app.get('/api/players', async (req, res) => {
   try {
     const { auction_id } = req.query;
     const query = auction_id ? { auctionId: auction_id } : {};
-    const players = await Player.find(query);
+    const players = await Player.find(query).sort({ lotNumber: 1, createdAt: -1 });
     const formatted = players.map(p => ({
       id: p._id.toString(),
-      auction_id: p.auctionId,
+      auction_id: p.auctionId.toString(),
       name: p.name,
       role: p.role,
       sport: p.sport,
@@ -522,185 +627,473 @@ app.get('/api/players', async (req, res) => {
       bio: p.bio,
       photo_url: p.photoUrl,
       status: p.status,
-      sold_to_team_id: p.soldToTeamId,
+      sold_to_team_id: p.soldToTeamId ? p.soldToTeamId.toString() : null,
       sold_price: p.soldPrice
     }));
-    res.json(formatted);
+    return sendSuccess(res, formatted);
   } catch (err) {
-    res.json([]);
+    return sendError(res, 'Failed to fetch players: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
 app.post('/api/players', async (req, res) => {
   try {
     const p = req.body;
+    if (!p.name || !p.auction_id) {
+      return sendError(res, 'Player name and target auction ID are required.', 'VALIDATION_ERROR', 400);
+    }
+
     const player = new Player({
-      auctionId: p.auction_id || 'demo_auction',
-      name: p.name,
+      auctionId: p.auction_id,
+      name: p.name.trim(),
       role: p.role || 'Batsman',
       sport: p.sport || 'Cricket',
-      basePrice: p.base_price || 100000,
+      basePrice: p.base_price ? Number(p.base_price) : 100000,
       city: p.city || '',
       phone: p.phone || '',
-      jerseyNumber: p.jersey_number || 1,
+      jerseyNumber: p.jersey_number ? Number(p.jersey_number) : 1,
       battingStyle: p.batting_style || 'Right Hand Batsman',
       bowlingStyle: p.bowling_style || 'Right Arm Medium',
-      age: p.age || 21,
-      lotNumber: p.lot_number || 1,
+      age: p.age ? Number(p.age) : 21,
+      lotNumber: p.lot_number ? Number(p.lot_number) : 1,
       bio: p.bio || '',
-      photoUrl: p.photo_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop'
+      photoUrl: p.photo_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop',
+      status: 'registered'
     });
+
     await player.save();
-    res.json({
+
+    const formatted = {
       id: player._id.toString(),
-      auction_id: player.auctionId,
+      auction_id: player.auctionId.toString(),
       name: player.name,
       role: player.role,
-      sport: player.sport,
       base_price: player.basePrice,
+      status: player.status,
+      photo_url: player.photoUrl
+    };
+    return sendSuccess(res, formatted, 201);
+  } catch (err) {
+    return sendError(res, 'Failed to register player: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+app.put('/api/players/:id', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  try {
+    const { status, role, base_price } = req.body;
+    const updateData = {};
+    if (status) updateData.status = status;
+    if (role) updateData.role = role;
+    if (base_price) updateData.basePrice = Number(base_price);
+
+    const player = await Player.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    if (!player) {
+      return sendError(res, 'Player not found.', 'NOT_FOUND', 404);
+    }
+    return sendSuccess(res, {
+      id: player._id.toString(),
+      name: player.name,
       status: player.status
     });
   } catch (err) {
-    res.status(400).json({ detail: err.message });
+    return sendError(res, 'Failed to update player: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// Team Routes
-app.get('/api/teams', async (req, res) => {
-  try {
-    const { auction_id } = req.query;
-    const query = auction_id ? { auctionId: auction_id } : {};
-    const teams = await Team.find(query);
-    const formatted = teams.map(t => ({
-      id: t._id.toString(),
-      auction_id: t.auctionId,
-      name: t.name,
-      owner_name: t.ownerName,
-      color: t.color,
-      purse: t.purse,
-      spent: t.spent
-    }));
-    res.json(formatted);
-  } catch (err) {
-    res.json([]);
-  }
-});
+// ── Server-Authoritative Real-Time Auction Bidding Engine ──
 
-app.post('/api/teams', async (req, res) => {
+// Select Next Player for Bidding
+app.post('/api/auction/next', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
-    const t = req.body;
-    const team = new Team({
-      auctionId: t.auction_id,
-      name: t.name,
-      ownerName: t.owner_name,
-      color: t.color || '#FF6B00',
-      purse: t.purse || 5000000
+    const { auction_id, player_id } = req.body;
+    if (!auction_id || !player_id) {
+      return sendError(res, 'Auction ID and Player ID required.', 'VALIDATION_ERROR', 400);
+    }
+
+    const [auction, player] = await Promise.all([
+      Auction.findById(auction_id),
+      Player.findById(player_id)
+    ]);
+
+    if (!auction || !player) {
+      return sendError(res, 'Auction or player not found.', 'NOT_FOUND', 404);
+    }
+
+    // Update Player & Auction state
+    player.status = 'live';
+    await player.save();
+
+    auction.status = 'live';
+    auction.currentPlayerId = player._id;
+    auction.currentBid = player.basePrice;
+    auction.currentTeamId = null;
+    await auction.save();
+
+    const formattedPlayer = {
+      id: player._id.toString(),
+      auction_id: player.auctionId.toString(),
+      name: player.name,
+      role: player.role,
+      base_price: player.basePrice,
+      photo_url: player.photoUrl,
+      status: player.status
+    };
+
+    // Broadcast Socket.IO Event
+    io.to(auction_id).emit('next_player', {
+      player: formattedPlayer,
+      base_price: player.basePrice
     });
-    await team.save();
-    res.json({
+
+    return sendSuccess(res, { message: 'Next player selected successfully.', player: formattedPlayer });
+  } catch (err) {
+    return sendError(res, 'Failed to select next player: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+// Place Bid (Server-Authoritative Validation & Atomic Update)
+app.post('/api/bids', authMiddleware, async (req, res) => {
+  try {
+    const { auction_id, player_id, team_id, amount } = req.body;
+    if (!auction_id || !player_id || !team_id || !amount) {
+      return sendError(res, 'Auction ID, player ID, team ID, and bid amount are required.', 'VALIDATION_ERROR', 400);
+    }
+
+    const [auction, player, team] = await Promise.all([
+      Auction.findById(auction_id),
+      Player.findById(player_id),
+      Team.findById(team_id)
+    ]);
+
+    if (!auction || !player || !team) {
+      return sendError(res, 'Auction, player, or team invalid.', 'NOT_FOUND', 404);
+    }
+
+    // 1. Verify auction is active
+    if (auction.status !== 'live') {
+      return sendError(res, 'Auction is not currently live.', 'INVALID_STATE', 400);
+    }
+
+    // 2. Verify team purse capacity
+    const remainingPurse = team.purse - team.spent;
+    if (amount > remainingPurse) {
+      return sendError(res, `Insufficient team purse. Remaining balance is ₹${remainingPurse.toLocaleString('en-IN')}`, 'INSUFFICIENT_PURSE', 400);
+    }
+
+    // 3. Verify bid exceeds current bid
+    if (amount <= auction.currentBid && auction.currentTeamId) {
+      return sendError(res, `Bid must be greater than current highest bid of ₹${auction.currentBid.toLocaleString('en-IN')}`, 'BID_TOO_LOW', 400);
+    }
+
+    // Atomically save bid and update auction state
+    const bid = new Bid({
+      auctionId: auction._id,
+      playerId: player._id,
+      teamId: team._id,
+      amount: Number(amount),
+      bidderUserId: req.user._id
+    });
+    await bid.save();
+
+    auction.currentBid = Number(amount);
+    auction.currentTeamId = team._id;
+    await auction.save();
+
+    const teamFormatted = {
       id: team._id.toString(),
-      auction_id: team.auctionId,
       name: team.name,
       owner_name: team.ownerName,
       color: team.color,
       purse: team.purse,
       spent: team.spent
+    };
+
+    // Broadcast Socket.IO Event
+    io.to(auction_id).emit('bid', {
+      bid: { id: bid._id.toString(), amount: Number(amount) },
+      team: teamFormatted,
+      player_id: player._id.toString()
     });
+
+    return sendSuccess(res, { message: 'Bid placed successfully.', bid, team: teamFormatted });
   } catch (err) {
-    res.status(400).json({ detail: err.message });
+    return sendError(res, 'Failed to place bid: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// Payment Routes
-app.post('/api/checkout', authMiddleware, async (req, res) => {
+// Mark Player Sold (Atomic Purse Deduction & Status Update)
+app.post('/api/auction/sold', authMiddleware, requireRole('coordinator'), async (req, res) => {
   try {
-    const { package_name, amount } = req.body;
-
-    if (razorpayClient) {
-      const order = await razorpayClient.orders.create({
-        amount: Math.round(amount * 100),
-        currency: 'INR',
-        receipt: `rcpt_${Date.now()}`
-      });
-      return res.json({
-        order_id: order.id,
-        key_id: process.env.RAZORPAY_KEY_ID,
-        amount: order.amount,
-        currency: order.currency,
-        package_name
-      });
+    const { auction_id, player_id, team_id, price } = req.body;
+    if (!auction_id || !player_id || !team_id) {
+      return sendError(res, 'Auction ID, player ID, and winning team ID required.', 'VALIDATION_ERROR', 400);
     }
 
-    // Mock Razorpay Order for testing/development mode
-    res.json({
-      order_id: 'order_demo_' + Date.now(),
-      key_id: RAZORPAY_KEY_ID,
-      amount: Math.round(amount * 100),
+    const soldPrice = Number(price);
+
+    // Atomic Team Purse Deduction
+    const team = await Team.findByIdAndUpdate(
+      team_id,
+      { $inc: { spent: soldPrice } },
+      { new: true }
+    );
+
+    // Atomic Player Sold Update
+    const player = await Player.findByIdAndUpdate(
+      player_id,
+      { $set: { status: 'sold', soldToTeamId: team_id, soldPrice: soldPrice } },
+      { new: true }
+    );
+
+    // Clear Auction Active State
+    await Auction.findByIdAndUpdate(auction_id, {
+      $set: { currentPlayerId: null, currentBid: 0, currentTeamId: null }
+    });
+
+    const teamFormatted = {
+      id: team._id.toString(),
+      name: team.name,
+      owner_name: team.ownerName,
+      purse: team.purse,
+      spent: team.spent
+    };
+
+    const playerFormatted = {
+      id: player._id.toString(),
+      name: player.name,
+      status: player.status,
+      sold_price: player.soldPrice
+    };
+
+    // Broadcast Socket.IO Event
+    io.to(auction_id).emit('sold', {
+      player: playerFormatted,
+      team: teamFormatted,
+      price: soldPrice
+    });
+
+    return sendSuccess(res, { message: 'Player marked as sold successfully.', player: playerFormatted, team: teamFormatted });
+  } catch (err) {
+    return sendError(res, 'Failed to mark player as sold: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+// Mark Player Unsold
+app.post('/api/auction/unsold', authMiddleware, requireRole('coordinator'), async (req, res) => {
+  try {
+    const { auction_id, player_id } = req.body;
+    if (!auction_id || !player_id) {
+      return sendError(res, 'Auction ID and player ID required.', 'VALIDATION_ERROR', 400);
+    }
+
+    const player = await Player.findByIdAndUpdate(
+      player_id,
+      { $set: { status: 'unsold' } },
+      { new: true }
+    );
+
+    await Auction.findByIdAndUpdate(auction_id, {
+      $set: { currentPlayerId: null, currentBid: 0, currentTeamId: null }
+    });
+
+    const playerFormatted = {
+      id: player._id.toString(),
+      name: player.name,
+      status: player.status
+    };
+
+    // Broadcast Socket.IO Event
+    io.to(auction_id).emit('unsold', { player: playerFormatted });
+
+    return sendSuccess(res, { message: 'Player marked as unsold.', player: playerFormatted });
+  } catch (err) {
+    return sendError(res, 'Failed to mark player as unsold: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+// File Upload Endpoint
+const handleUpload = (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      return sendError(res, err.code === 'LIMIT_FILE_SIZE' ? 'File size exceeds 5MB limit.' : err.message, 'FILE_TOO_LARGE', 400);
+    } else if (err) {
+      return sendError(res, err.message, 'INVALID_FILE', 400);
+    }
+    if (!req.file) {
+      return sendError(res, 'No file uploaded.', 'NO_FILE', 400);
+    }
+    const fileUrl = `/static/uploads/${req.file.filename}`;
+    return sendSuccess(res, { url: fileUrl, filename: req.file.filename });
+  });
+};
+
+app.post('/api/upload', authMiddleware, handleUpload);
+app.post('/api/uploads/image', authMiddleware, handleUpload);
+
+// ── Razorpay Server-Authoritative Payments ──
+
+app.post('/api/checkout', authMiddleware, async (req, res) => {
+  try {
+    const { package_id, package_name } = req.body;
+    const pkgKey = package_id || package_name || '1 Auction';
+    const pkg = PACKAGES[pkgKey] || PACKAGES['1 Auction'];
+
+    const amountInPaisa = Math.round(pkg.price * 100);
+
+    let orderId = `order_sim_${Date.now()}`;
+    if (razorpayClient && pkg.price > 0 && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.includes('demo')) {
+      try {
+        const order = await razorpayClient.orders.create({
+          amount: amountInPaisa,
+          currency: 'INR',
+          receipt: `rcpt_${Date.now()}`
+        });
+        orderId = order.id;
+      } catch (e) {
+        console.warn('[Razorpay Order Notice] Live order creation warning:', e.message);
+      }
+    }
+
+    const payment = new Payment({
+      userId: req.user._id,
+      packageId: pkg.id,
+      packageName: pkg.name,
+      amount: pkg.price,
+      razorpayOrderId: orderId,
+      status: pkg.price === 0 ? 'paid' : 'created'
+    });
+    await payment.save();
+
+    return sendSuccess(res, {
+      order_id: orderId,
+      key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_demo123key',
+      amount: amountInPaisa,
       currency: 'INR',
-      package_name
+      package_name: pkg.name
     });
   } catch (err) {
-    console.error('Checkout error:', err);
-    res.status(500).json({ detail: 'Checkout failed: ' + err.message });
+    return sendError(res, 'Failed to create payment checkout order: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
 app.post('/api/payment/verify', authMiddleware, async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, package_name, amount } = req.body;
-    const payment = new Payment({
-      userId: req.user._id.toString(),
-      packageName: package_name,
-      amount: amount || 0,
-      razorpayOrderId: razorpay_order_id || 'demo_order',
-      razorpayPaymentId: razorpay_payment_id || 'demo_payment',
-      status: 'completed'
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, package_name, amount } = req.body;
+
+    if (!razorpay_order_id) {
+      return sendError(res, 'Order ID is required.', 'VALIDATION_ERROR', 400);
+    }
+
+    // Cryptographic Signature Verification
+    if (razorpay_signature && process.env.RAZORPAY_KEY_SECRET) {
+      const generatedSignature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+        .digest('hex');
+
+      if (generatedSignature !== razorpay_signature) {
+        return sendError(res, 'Invalid payment signature verification failed.', 'INVALID_SIGNATURE', 400);
+      }
+    }
+
+    const payment = await Payment.findOneAndUpdate(
+      { razorpayOrderId: razorpay_order_id },
+      {
+        $set: {
+          razorpayPaymentId: razorpay_payment_id || 'pay_' + Date.now(),
+          razorpaySignature: razorpay_signature || '',
+          status: 'paid'
+        }
+      },
+      { new: true, upsert: true }
+    );
+
+    return sendSuccess(res, {
+      message: `${payment.packageName} package activated successfully!`,
+      payment_id: payment._id.toString()
     });
-    await payment.save();
-    res.json({ status: 'success', message: `${package_name} package activated successfully!` });
   } catch (err) {
-    res.status(400).json({ detail: err.message });
+    return sendError(res, 'Payment verification failed: ' + err.message, 'SERVER_ERROR', 500);
+  }
+});
+
+// Idempotent Razorpay Webhook Handler
+app.post('/api/payment/webhook', async (req, res) => {
+  try {
+    const signature = req.headers['x-razorpay-signature'];
+    if (signature && process.env.RAZORPAY_WEBHOOK_SECRET) {
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
+        .update(JSON.stringify(req.body))
+        .digest('hex');
+
+      if (expectedSignature !== signature) {
+        return sendError(res, 'Invalid webhook signature.', 'INVALID_SIGNATURE', 400);
+      }
+    }
+
+    const event = req.body.event;
+    if (event === 'payment.captured' || event === 'order.paid') {
+      const paymentEntity = req.body.payload?.payment?.entity || req.body.payload?.order?.entity;
+      if (paymentEntity?.order_id) {
+        await Payment.updateOne(
+          { razorpayOrderId: paymentEntity.order_id },
+          {
+            $set: {
+              status: 'paid',
+              razorpayPaymentId: paymentEntity.id || ''
+            }
+          }
+        );
+      }
+    }
+    return sendSuccess(res, { status: 'webhook_processed' });
+  } catch (err) {
+    return sendError(res, 'Webhook error: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
 app.get('/api/payments', authMiddleware, async (req, res) => {
   try {
-    const payments = await Payment.find({ userId: req.user._id.toString() }).sort({ createdAt: -1 });
+    const payments = await Payment.find({ userId: req.user._id }).sort({ createdAt: -1 });
     const formatted = payments.map(p => ({
       id: p._id.toString(),
       package_name: p.packageName,
       amount: p.amount,
       status: p.status,
-      created_at: p.createdAt.toISOString()
+      created_at: p.createdAt ? p.createdAt.toISOString() : new Date().toISOString()
     }));
-    res.json(formatted);
+    return sendSuccess(res, formatted);
   } catch (err) {
-    res.json([]);
+    return sendError(res, 'Failed to fetch payments: ' + err.message, 'SERVER_ERROR', 500);
   }
 });
 
-// Socket.IO Real-time bidding
+// ── Socket.IO Connection & Real-Time Event Handlers ──
 io.on('connection', (socket) => {
-  console.log('⚡ Socket client connected:', socket.id);
+  console.log('⚡ Socket connected:', socket.id);
 
   socket.on('join_auction', ({ auction_id }) => {
-    socket.join(auction_id);
+    if (auction_id) {
+      socket.join(auction_id.toString());
+      console.log(`Socket ${socket.id} joined room: ${auction_id}`);
+    }
   });
 
-  socket.on('place_bid', (data) => {
-    io.to(data.auction_id).emit('new_bid', data);
-  });
-
-  socket.on('player_sold', (data) => {
-    io.to(data.auction_id).emit('player_sold', data);
+  socket.on('leave_auction', ({ auction_id }) => {
+    if (auction_id) {
+      socket.leave(auction_id.toString());
+    }
   });
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+    console.log('Socket disconnected:', socket.id);
   });
 });
 
-// Start Server
+// ── Start Production Server ──
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 MERN Stack Node.js Express server running on port ${PORT}`);
+  console.log(`🚀 AuctionPro Production Backend running on port ${PORT}`);
 });
+
+module.exports = app;

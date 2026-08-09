@@ -24,25 +24,34 @@ export default function PlayerRegister() {
   });
 
   useEffect(() => {
-    api.get('/auctions/public').then(r => setAuctions(r.data)).catch(()=>{});
+    api.get('/auctions/public')
+      .then(r => { if (Array.isArray(r.data)) setAuctions(r.data); })
+      .catch(() => {});
   }, []);
 
   const uploadPhoto = async (e) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    const t = localStorage.getItem('ap_token');
-    if (!t) { toast({ title: 'Sign in first', description: 'Please create a free player account to upload a photo.', variant: 'destructive' }); return; }
+    const f = e.target.files?.[0];
+    if (!f) return;
     setUploading(true);
     try {
-      const fd = new FormData(); fd.append('file', f);
-      const { data } = await api.post('/uploads/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const fd = new FormData();
+      fd.append('file', f);
+      const { data } = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setPhotoUrl(data.url);
-    } catch (err) { toast({ title: 'Upload failed', variant: 'destructive' }); }
-    finally { setUploading(false); }
+      toast({ title: 'Photo uploaded successfully!' });
+    } catch (err) {
+      toast({ title: 'Upload failed', description: err.userMessage || 'Only images up to 5MB are allowed.', variant: 'destructive' });
+    } finally {
+      setUploading(false);
+    }
   };
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.auction_id) { toast({ title: 'Choose an auction', variant: 'destructive' }); return; }
+    if (!form.auction_id) {
+      toast({ title: 'Choose an auction pool', variant: 'destructive' });
+      return;
+    }
     setLoading(true);
     try {
       await api.post('/players', {
@@ -53,8 +62,10 @@ export default function PlayerRegister() {
       });
       setDone(true);
     } catch (err) {
-      toast({ title: 'Registration failed', description: err?.response?.data?.detail || 'Try again', variant: 'destructive' });
-    } finally { setLoading(false); }
+      toast({ title: 'Registration failed', description: err.userMessage || 'Could not complete player registration.', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (done) {
@@ -65,7 +76,7 @@ export default function PlayerRegister() {
             <CheckCircle2 className="w-10 h-10 text-white"/>
           </div>
           <h1 className="font-display text-3xl text-white">YOU'RE IN <span className="brand-gradient-text">THE POOL!</span></h1>
-          <p className="text-white/70 mt-3">Thank you {form.name}. You'll appear in the auction pool and can track your status by signing in.</p>
+          <p className="text-white/70 mt-3">Thank you {form.name}. You'll appear in the auction pool and can track your status.</p>
           <Link to="/login" className="inline-block mt-6"><Button className="bg-gradient-to-r from-orange-500 to-amber-500 text-white">Sign in to track</Button></Link>
         </Card>
       </div>
@@ -95,35 +106,51 @@ export default function PlayerRegister() {
 
             <div className="flex items-center gap-4">
               <div className="w-20 h-20 rounded-2xl border border-white/10 bg-white/5 overflow-hidden flex items-center justify-center">
-                {photoUrl ? <img src={`${BACKEND}${photoUrl}`} alt="me" className="w-full h-full object-cover"/> : <Upload className="w-6 h-6 text-white/30"/>}
+                {photoUrl ? <img src={photoUrl.startsWith('http') ? photoUrl : `${BACKEND}${photoUrl}`} alt="me" className="w-full h-full object-cover"/> : <Upload className="w-6 h-6 text-white/30"/>}
               </div>
               <div>
-                <Label className="text-white/70">Player Photo</Label>
-                <input data-testid="player-photo-input" type="file" accept="image/*" onChange={uploadPhoto} className="block mt-1.5 text-sm text-white/70 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-orange-500/20 file:text-orange-300 hover:file:bg-orange-500/30"/>
-                {uploading && <p className="text-xs text-white/50 mt-1">Uploading...</p>}
-                <p className="text-xs text-white/40 mt-1">Sign in with a player account to upload a photo.</p>
+                <Label className="text-white/70">Profile Photo</Label>
+                <Input type="file" accept="image/*" onChange={uploadPhoto} disabled={uploading} className="mt-1.5 text-xs text-white/70 bg-white/5 border-white/10 file:bg-orange-500 file:text-white file:border-0 file:rounded-md file:px-2 file:py-1 file:mr-2"/>
+                <p className="text-[11px] text-white/40 mt-1">JPG, PNG, WEBP, GIF up to 5MB</p>
               </div>
             </div>
 
             <div className="grid sm:grid-cols-2 gap-4">
-              <div><Label className="text-white/70">Full Name *</Label><Input data-testid="player-name" required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/></div>
-              <div><Label className="text-white/70">Sport</Label><Input value={form.sport} onChange={e=>setForm({...form,sport:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/></div>
-              <div><Label className="text-white/70">Role *</Label>
-                <select required value={form.role} onChange={e=>setForm({...form,role:e.target.value})} className="mt-1.5 w-full h-10 rounded-md bg-white/5 border border-white/10 text-white px-3 outline-none focus-visible:ring-2 focus-visible:ring-orange-500">
-                  {ROLES.map(r=><option key={r} value={r}>{r}</option>)}
+              <div>
+                <Label className="text-white/70">Full Name *</Label>
+                <Input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Virat Kohli" className="mt-1.5 bg-white/5 border-white/10 text-white"/>
+              </div>
+              <div>
+                <Label className="text-white/70">Role *</Label>
+                <select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} className="mt-1.5 w-full h-10 rounded-md bg-white/5 border border-white/10 text-white px-3 outline-none">
+                  {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
-              <div><Label className="text-white/70">Base Price (₹)</Label><Input type="number" value={form.base_price} onChange={e=>setForm({...form,base_price:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/></div>
-              <div><Label className="text-white/70">City</Label><Input value={form.city} onChange={e=>setForm({...form,city:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/></div>
-              <div><Label className="text-white/70">Phone</Label><Input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/></div>
-              <div><Label className="text-white/70">Jersey Number</Label><Input type="number" value={form.jersey_number} onChange={e=>setForm({...form,jersey_number:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/></div>
+              <div>
+                <Label className="text-white/70">Base Price (₹)</Label>
+                <Input type="number" value={form.base_price} onChange={e=>setForm({...form,base_price:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white"/>
+              </div>
+              <div>
+                <Label className="text-white/70">City / State</Label>
+                <Input value={form.city} onChange={e=>setForm({...form,city:e.target.value})} placeholder="Mumbai" className="mt-1.5 bg-white/5 border-white/10 text-white"/>
+              </div>
+              <div>
+                <Label className="text-white/70">Phone</Label>
+                <Input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="+91-..." className="mt-1.5 bg-white/5 border-white/10 text-white"/>
+              </div>
+              <div>
+                <Label className="text-white/70">Jersey Number</Label>
+                <Input type="number" value={form.jersey_number} onChange={e=>setForm({...form,jersey_number:e.target.value})} placeholder="18" className="mt-1.5 bg-white/5 border-white/10 text-white"/>
+              </div>
             </div>
+
             <div>
-              <Label className="text-white/70">Short Bio</Label>
-              <Textarea rows={3} value={form.bio} onChange={e=>setForm({...form,bio:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white focus-visible:ring-orange-500"/>
+              <Label className="text-white/70">Short Bio / Achievements</Label>
+              <Textarea rows={3} value={form.bio} onChange={e=>setForm({...form,bio:e.target.value})} placeholder="Right hand batsman with 5 years district experience..." className="mt-1.5 bg-white/5 border-white/10 text-white"/>
             </div>
-            <Button data-testid="player-submit" disabled={loading} className="w-full h-11 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold">
-              {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Submitting...</> : 'Join Auction Pool'}
+
+            <Button type="submit" disabled={loading || uploading} className="w-full h-12 bg-gradient-to-r from-orange-500 to-amber-500 text-white font-bold text-lg rounded-xl">
+              {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Registering...</> : 'Submit Registration'}
             </Button>
           </form>
         </Card>

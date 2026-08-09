@@ -51,12 +51,16 @@ function Sidebar() {
 }
 
 function Overview() {
-  const [stats, setStats] = useState({ total_auctions: 1, active_auctions: 1, total_players: 12, total_revenue: 5000000 });
+  const [stats, setStats] = useState({ total_auctions: 0, active_auctions: 0, total_players: 0, total_revenue: 0 });
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
     api.get('/stats')
       .then(r => { if (r.data) setStats(r.data); })
-      .catch(() => { /* Silent fallback — zero error toast */ });
+      .catch(err => { console.warn('Stats load warning:', err.userMessage); })
+      .finally(() => setLoading(false));
   }, []);
+
   const cards = [
     { label: 'Total Auctions', val: stats.total_auctions, icon: Trophy },
     { label: 'Active Auctions', val: stats.active_auctions, icon: Play },
@@ -73,7 +77,7 @@ function Overview() {
             <div className="flex items-center justify-between">
               <div className="w-11 h-11 rounded-xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center text-orange-400"><c.icon className="w-5 h-5"/></div>
             </div>
-            <div className="mt-4 font-display text-4xl text-white">{c.val}</div>
+            <div className="mt-4 font-display text-4xl text-white">{loading ? '...' : c.val}</div>
             <div className="text-xs uppercase tracking-widest text-white/50 mt-1">{c.label}</div>
           </Card>
         ))}
@@ -88,39 +92,48 @@ function MyAuctions() {
   const [list, setList] = useState([]);
   const [open, setOpen] = useState(false);
   const [delId, setDelId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({ name:'', sport:'Cricket', date:new Date().toISOString().slice(0,10), base_price:100000, max_teams:8, budget_per_team:5000000, description:'' });
+
   const load = () => {
-    api.get('/auctions')
+    api.get('/auctions?mine=true')
       .then(r => { if (Array.isArray(r.data)) setList(r.data); })
-      .catch(() => { /* silent fallback */ });
+      .catch(err => { toast({ title: 'Unable to load auctions', description: err.userMessage || 'Check backend connection.', variant: 'destructive' }); });
   };
+
   useEffect(() => { load(); }, []);
+
   const create = async (e) => {
     e.preventDefault();
-    const newAuc = {
-      id: 'auc_' + Date.now(),
-      name: form.name || 'New Auction',
-      sport: form.sport || 'Cricket',
-      date: form.date || new Date().toISOString().slice(0,10),
-      base_price: Number(form.base_price) || 100000,
-      max_teams: Number(form.max_teams) || 8,
-      budget_per_team: Number(form.budget_per_team) || 5000000,
-      description: form.description || '',
-      status: 'upcoming'
-    };
-
-    setList(prev => [newAuc, ...prev]);
-    setOpen(false);
-    toast({ title: '🎉 Auction Created Successfully!', description: `${newAuc.name} is now live.` });
-
+    setSubmitting(true);
     try {
-      await api.post('/auctions', { ...form, base_price:Number(form.base_price), max_teams:Number(form.max_teams), budget_per_team:Number(form.budget_per_team) });
+      const res = await api.post('/auctions', {
+        ...form,
+        base_price: Number(form.base_price),
+        max_teams: Number(form.max_teams),
+        budget_per_team: Number(form.budget_per_team)
+      });
+      setOpen(false);
+      load();
+      toast({ title: '🎉 Auction Created Successfully!', description: `${res.data.name} is now live.` });
+      setForm({ name:'', sport:'Cricket', date:new Date().toISOString().slice(0,10), base_price:100000, max_teams:8, budget_per_team:5000000, description:'' });
     } catch (err) {
-      const stored = JSON.parse(localStorage.getItem('ap_auctions') || '[]');
-      localStorage.setItem('ap_auctions', JSON.stringify([newAuc, ...stored]));
+      toast({ title: 'Creation Failed', description: err.userMessage || 'Could not create auction.', variant: 'destructive' });
+    } finally {
+      setSubmitting(false);
     }
   };
-  const remove = async () => { await api.delete(`/auctions/${delId}`); setDelId(null); load(); };
+
+  const remove = async () => {
+    try {
+      await api.delete(`/auctions/${delId}`);
+      setDelId(null);
+      load();
+      toast({ title: 'Auction deleted' });
+    } catch (err) {
+      toast({ title: 'Delete failed', description: err.userMessage || 'Could not delete auction.', variant: 'destructive' });
+    }
+  };
 
   return (
     <div>
@@ -166,7 +179,11 @@ function MyAuctions() {
               <div className="col-span-2"><Label>Budget per Team (₹)</Label><Input type="number" value={form.budget_per_team} onChange={e=>setForm({...form,budget_per_team:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white"/></div>
             </div>
             <div><Label>Description</Label><Textarea rows={2} value={form.description} onChange={e=>setForm({...form,description:e.target.value})} className="mt-1.5 bg-white/5 border-white/10 text-white"/></div>
-            <DialogFooter><Button type="submit" data-testid="submit-create-auction" className="bg-gradient-to-r from-orange-500 to-amber-500 text-white">Create</Button></DialogFooter>
+            <DialogFooter>
+              <Button type="submit" disabled={submitting} data-testid="submit-create-auction" className="bg-gradient-to-r from-orange-500 to-amber-500 text-white">
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-1"/> : 'Create'}
+              </Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
@@ -186,22 +203,47 @@ function TeamsPage() {
   const [aid, setAid] = useState('');
   const [teams, setTeams] = useState([]);
   const [form, setForm] = useState({ name:'', owner_name:'', color:'#FF6B00', purse:'' });
-  useEffect(() => { api.get('/auctions?mine=true').then(r=>{ setAuctions(r.data); if(r.data[0]) setAid(r.data[0].id); }); }, []);
-  useEffect(() => { if(aid) api.get(`/teams?auction_id=${aid}`).then(r=>setTeams(r.data)); }, [aid]);
+
+  useEffect(() => {
+    api.get('/auctions?mine=true').then(r => {
+      if (Array.isArray(r.data) && r.data.length > 0) {
+        setAuctions(r.data);
+        setAid(r.data[0].id);
+      }
+    });
+  }, []);
+
+  const loadTeams = (id) => {
+    if (id) {
+      api.get(`/teams?auction_id=${id}`).then(r => {
+        if (Array.isArray(r.data)) setTeams(r.data);
+      });
+    }
+  };
+
+  useEffect(() => { loadTeams(aid); }, [aid]);
+
   const create = async (e) => {
     e.preventDefault();
     try {
       await api.post('/teams', { auction_id: aid, ...form, purse: form.purse ? Number(form.purse) : undefined });
       setForm({ name:'', owner_name:'', color:'#FF6B00', purse:'' });
-      api.get(`/teams?auction_id=${aid}`).then(r=>setTeams(r.data)).catch(()=>{});
+      loadTeams(aid);
       toast({ title: '✅ Team added successfully!' });
     } catch(err) {
-      setForm({ name:'', owner_name:'', color:'#FF6B00', purse:'' });
-      api.get(`/teams?auction_id=${aid}`).then(r=>setTeams(r.data)).catch(()=>{});
-      toast({ title: '✅ Team added successfully!' });
+      toast({ title: 'Failed to add team', description: err.userMessage || 'Check team inputs.', variant: 'destructive' });
     }
   };
-  const del = async (id) => { await api.delete(`/teams/${id}`); api.get(`/teams?auction_id=${aid}`).then(r=>setTeams(r.data)); };
+
+  const del = async (id) => {
+    try {
+      await api.delete(`/teams/${id}`);
+      loadTeams(aid);
+      toast({ title: 'Team deleted' });
+    } catch (err) {
+      toast({ title: 'Delete failed', description: err.userMessage, variant: 'destructive' });
+    }
+  };
 
   return (
     <div>
@@ -232,7 +274,7 @@ function TeamsPage() {
                 <div className="text-white font-semibold">{t.name}</div>
                 <div className="text-white/50 text-sm">Owner: {t.owner_name}</div>
                 <div className="text-orange-400 text-sm mt-2">Purse: ₹{Number(t.purse).toLocaleString('en-IN')}</div>
-                <div className="text-white/40 text-xs">Squad: {t.squad_count || 0} players</div>
+                <div className="text-white/40 text-xs">Spent: ₹{Number(t.spent || 0).toLocaleString('en-IN')}</div>
               </div>
               <Button size="sm" variant="outline" onClick={()=>del(t.id)} className="border-red-500/40 text-red-400 bg-transparent"><Trash2 className="w-4 h-4"/></Button>
             </div>
@@ -249,17 +291,32 @@ function PlayersPage() {
   const [aid, setAid] = useState('');
   const [players, setPlayers] = useState([]);
   const [statusLoading, setStatusLoading] = useState(null);
-  useEffect(() => { api.get('/auctions?mine=true').then(r=>{ setAuctions(r.data); if(r.data[0]) setAid(r.data[0].id); }); }, []);
-  const load = () => { if(aid) api.get(`/players?auction_id=${aid}`).then(r=>setPlayers(r.data)); };
+
+  useEffect(() => {
+    api.get('/auctions?mine=true').then(r => {
+      if (Array.isArray(r.data) && r.data.length > 0) {
+        setAuctions(r.data);
+        setAid(r.data[0].id);
+      }
+    });
+  }, []);
+
+  const load = () => {
+    if (aid) api.get(`/players?auction_id=${aid}`).then(r => {
+      if (Array.isArray(r.data)) setPlayers(r.data);
+    });
+  };
+
   useEffect(load, [aid]);
+
   const setStatus = async (p, status) => {
     setStatusLoading(p.id + status);
     try {
       await api.put(`/players/${p.id}`, { status });
       toast({ title: `Marked ${status}` });
       load();
-    } catch {
-      toast({ title: 'Failed to update status', variant: 'destructive' });
+    } catch(err) {
+      toast({ title: 'Failed to update player status', description: err.userMessage, variant: 'destructive' });
     } finally {
       setStatusLoading(null);
     }
@@ -279,7 +336,7 @@ function PlayersPage() {
           <Card key={p.id} data-testid={`player-card-${p.id}`} className="bg-white/[0.03] border border-white/10 p-4 rounded-2xl">
             <div className="flex items-start gap-3">
               <div className="w-14 h-14 rounded-xl bg-white/5 border border-white/10 overflow-hidden flex items-center justify-center">
-                {p.photo_url ? <img src={`${BACKEND}${p.photo_url}`} alt={p.name} className="w-full h-full object-cover"/> : <span className="font-display text-xl text-orange-400">{p.name?.[0]}</span>}
+                {p.photo_url ? <img src={p.photo_url.startsWith('http') ? p.photo_url : `${BACKEND}${p.photo_url}`} alt={p.name} className="w-full h-full object-cover"/> : <span className="font-display text-xl text-orange-400">{p.name?.[0]}</span>}
               </div>
               <div className="flex-1">
                 <div className="text-white font-semibold">{p.name}</div>
@@ -302,19 +359,6 @@ function PlayersPage() {
   );
 }
 
-/**
- * PaymentsPage — Razorpay payment integration
- *
- * Flow:
- *   1. User clicks "Buy" on a package card
- *   2. We call POST /api/checkout to create a Razorpay order (backend)
- *   3. We open the Razorpay checkout modal using their JS SDK
- *   4. User pays inside the modal
- *   5. We call POST /api/payment/verify to confirm with the backend
- *   6. Payment is saved and shown in the transaction history table
- */
-
-/** Dynamically load the Razorpay checkout script from their CDN */
 function loadRazorpayScript() {
   return new Promise((resolve) => {
     if (document.getElementById('razorpay-script')) {
@@ -322,109 +366,85 @@ function loadRazorpayScript() {
       return;
     }
     const script = document.createElement('script');
-    script.id  = 'razorpay-script';
+    script.id = 'razorpay-script';
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.onload  = () => resolve(true);
+    script.onload = () => resolve(true);
     script.onerror = () => resolve(false);
     document.body.appendChild(script);
   });
 }
 
-/** Available pricing packages */
 const PACKAGES = [
-  { id: 'free',      name: 'Free',     price: 0,    teams: 2,  color: '#EF4444', features: ['1 Auction', 'Up to 2 Teams', 'Live Bidding Room'] },
-  { id: 'tier_3000', name: '4 Teams',  price: 3000, teams: 4,  color: '#10B981', features: ['1 Auction', 'Up to 4 Teams', 'Live Bidding Room', 'Fortune Wheel'] },
-  { id: 'tier_4000', name: '8 Teams',  price: 4000, teams: 8,  color: '#F59E0B', features: ['1 Auction', 'Up to 8 Teams', 'Live Bidding Room', 'Fortune Wheel'] },
-  { id: 'tier_5000', name: '12 Teams', price: 5000, teams: 12, color: '#3B82F6', features: ['1 Auction', 'Up to 12 Teams', 'Live Bidding Room', 'Fortune Wheel'] },
-  { id: 'tier_6000', name: '16 Teams', price: 6000, teams: 16, color: '#14B8A6', features: ['1 Auction', 'Up to 16 Teams', 'Live Bidding Room', 'Fortune Wheel'] },
-  { id: 'tier_7000', name: '22 Teams', price: 7000, teams: 22, color: '#8B5CF6', features: ['1 Auction', 'Up to 22 Teams', 'Live Bidding Room', 'Fortune Wheel'] },
-  { id: 'tier_8000', name: '30 Teams', price: 8000, teams: 30, color: '#EA580C', features: ['1 Auction', 'Up to 30 Teams', 'Live Bidding Room', 'Fortune Wheel'] },
+  { id: '1 Auction', name: '1 Auction Pass', price: 999, features: ['1 Auction', 'Up to 8 Teams', 'Live Room'] },
+  { id: '4 Teams', name: '4 Teams Package', price: 1999, features: ['3 Auctions', 'Up to 4 Teams', 'Live Room', 'Fortune Wheel'] },
+  { id: '8 Teams', name: '8 Teams Package', price: 3499, features: ['5 Auctions', 'Up to 8 Teams', 'Live Room', 'Fortune Wheel'] },
+  { id: 'Unlimited', name: 'Unlimited League Pass', price: 9999, features: ['Unlimited Auctions', 'Unlimited Teams', 'Live Stream Overlay'] },
 ];
 
 function PaymentsPage() {
-  const { user }      = useAuth();
-  const { toast }     = useToast();
-  const [history, setHistory]       = useState([]);
-  const [purchasing, setPurchasing] = useState(null);   // ID of package being purchased
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [history, setHistory] = useState([]);
+  const [purchasing, setPurchasing] = useState(null);
 
-  // Load existing payment history on mount
-  useEffect(() => {
+  const loadHistory = () => {
     api.get('/payments')
-      .then(r => setHistory(r.data))
-      .catch(() => { /* No payments yet — show empty state */ });
-  }, []);
+      .then(r => { if (Array.isArray(r.data)) setHistory(r.data); })
+      .catch(() => {});
+  };
 
-  /**
-   * Handle the full Razorpay payment flow for a chosen package.
-   * @param {Object} pkg - The package object with name and price
-   */
+  useEffect(() => { loadHistory(); }, []);
+
   const handleBuy = async (pkg) => {
     setPurchasing(pkg.id);
 
     try {
-      let orderData = { order_id: 'order_' + Date.now(), key_id: 'rzp_test_demo123key' };
-      try {
-        const res = await api.post('/checkout', { package_name: pkg.name, amount: pkg.price });
-        if (res.data) orderData = res.data;
-      } catch (e) { /* fallback order */ }
+      const res = await api.post('/checkout', { package_id: pkg.id, package_name: pkg.name });
+      const orderData = res.data;
 
       const scriptLoaded = await loadRazorpayScript();
-      if (scriptLoaded && window.Razorpay && orderData.key_id && !orderData.key_id.includes('demo') && !orderData.key_id.includes('mock')) {
+      if (scriptLoaded && window.Razorpay && orderData.key_id && !orderData.key_id.includes('demo')) {
         const razorpay = new window.Razorpay({
-          key:         orderData.key_id,
-          amount:      orderData.amount || Math.round(pkg.price * 100),
-          currency:    orderData.currency || 'INR',
-          order_id:    orderData.order_id,
-          name:        'AuctionPro',
+          key: orderData.key_id,
+          amount: orderData.amount,
+          currency: orderData.currency || 'INR',
+          order_id: orderData.order_id,
+          name: 'AuctionPro',
           description: `${pkg.name} Package`,
           prefill: {
-            name:  user?.name  || '',
+            name: user?.name || '',
             email: user?.email || '',
           },
           theme: { color: '#F97316' },
           handler: async (response) => {
             try {
               await api.post('/payment/verify', {
-                razorpay_order_id:   response.razorpay_order_id,
+                razorpay_order_id: response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature:  response.razorpay_signature,
-                package_name:        pkg.name,
-                amount:              pkg.price,
+                razorpay_signature: response.razorpay_signature,
+                package_name: pkg.name
               });
               toast({ title: `✅ Payment successful! ${pkg.name} package activated.` });
-              const refreshed = await api.get('/payments');
-              setHistory(refreshed.data);
-            } catch {
-              toast({ title: `✅ ${pkg.name} package activated successfully!` });
+              loadHistory();
+            } catch (err) {
+              toast({ title: 'Verification failed', description: err.userMessage || 'Signature verification failed', variant: 'destructive' });
             }
           },
-          modal: {
-            ondismiss: () => {
-              toast({ title: 'Payment cancelled' });
-            },
-          },
+          modal: { ondismiss: () => toast({ title: 'Payment cancelled' }) }
         });
         razorpay.open();
       } else {
-        // Direct package activation
+        // Test / Direct Activation Verification
         await api.post('/payment/verify', {
-          razorpay_order_id: orderData.order_id || 'demo_order',
-          razorpay_payment_id: 'pay_demo_' + Date.now(),
-          package_name: pkg.name,
-          amount: pkg.price,
+          razorpay_order_id: orderData.order_id,
+          razorpay_payment_id: 'pay_test_' + Date.now(),
+          package_name: pkg.name
         });
         toast({ title: `✅ ${pkg.name} package activated successfully!` });
-        try {
-          const refreshed = await api.get('/payments');
-          setHistory(refreshed.data);
-        } catch { /* empty */ }
+        loadHistory();
       }
     } catch (err) {
-      toast({ title: `✅ ${pkg.name} package activated successfully!` });
-      try {
-        const refreshed = await api.get('/payments');
-        setHistory(refreshed.data);
-      } catch { /* empty */ }
+      toast({ title: 'Checkout Failed', description: err.userMessage || 'Failed to initialize payment.', variant: 'destructive' });
     } finally {
       setPurchasing(null);
     }
@@ -435,7 +455,6 @@ function PaymentsPage() {
       <h1 className="font-display text-4xl text-white">PAYMENTS</h1>
       <p className="text-white/60 mt-1">Choose a package to unlock more auctions and features.</p>
 
-      {/* ── Pricing Cards ── */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
         {PACKAGES.map(pkg => (
           <Card key={pkg.id} className="bg-white/[0.03] border border-white/10 p-5 rounded-2xl flex flex-col">
@@ -463,7 +482,6 @@ function PaymentsPage() {
         ))}
       </div>
 
-      {/* ── Transaction History ── */}
       <h2 className="font-display text-2xl text-white mt-10 mb-3">TRANSACTION <span className="brand-gradient-text">HISTORY</span></h2>
       <Card className="bg-white/[0.03] border border-white/10 overflow-hidden">
         <table className="w-full text-sm">
@@ -471,7 +489,6 @@ function PaymentsPage() {
             <tr className="bg-white/5 text-white/60">
               <th className="text-left p-3">Package</th>
               <th className="text-left p-3">Amount</th>
-              <th className="text-left p-3">Payment ID</th>
               <th className="text-left p-3">Status</th>
               <th className="text-left p-3">Date</th>
             </tr>
@@ -479,7 +496,7 @@ function PaymentsPage() {
           <tbody>
             {history.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-8 text-center text-white/40">
+                <td colSpan={4} className="p-8 text-center text-white/40">
                   No transactions yet. Purchase a package above to get started.
                 </td>
               </tr>
@@ -488,11 +505,10 @@ function PaymentsPage() {
               <tr key={row.id} className="border-t border-white/5">
                 <td className="p-3 text-white">{row.package_name}</td>
                 <td className="p-3 text-orange-400">₹{Number(row.amount).toLocaleString('en-IN')}</td>
-                <td className="p-3 text-white/50 font-mono text-xs">{row.payment_id || '—'}</td>
                 <td className="p-3">
-                  {row.payment_status === 'paid'
+                  {row.status === 'paid' || row.status === 'completed'
                     ? <Badge className="bg-green-500/20 text-green-400 border-green-500/30">Paid</Badge>
-                    : <Badge className="bg-white/10 text-white/70">{row.payment_status}</Badge>}
+                    : <Badge className="bg-white/10 text-white/70">{row.status}</Badge>}
                 </td>
                 <td className="p-3 text-white/50">{new Date(row.created_at).toLocaleString()}</td>
               </tr>

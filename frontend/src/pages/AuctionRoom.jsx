@@ -182,6 +182,8 @@ export default function AuctionRoom() {
             <div className="bg-amber-500/90 text-slate-950 text-xs font-bold px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow">
               <span>AVL :</span> <span className="text-sm font-black">{registeredPlayers.length}</span>
             </div>
+          </div>
+
           {/* Advanced Toolkit Action Buttons */}
           <div className="flex items-center gap-2">
             <button
