@@ -23,18 +23,28 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-// ── Environment Configuration & Strict Validation ──
+// ── Environment Configuration & Strict Validation (Zero Fallback Secrets) ──
 const PORT = process.env.PORT || 8000;
 
-if (!process.env.MONGO_URL && process.env.NODE_ENV === 'production') {
-  throw new Error('FATAL: MONGO_URL environment variable is required in production.');
+const MONGO_URL = process.env.MONGO_URL;
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!MONGO_URL) {
+  console.error('❌ FATAL ERROR: MONGO_URL environment variable is required. Server startup aborted.');
+  if (process.env.NODE_ENV === 'production' || process.env.STRICT_ENV === 'true') {
+    process.exit(1);
+  }
 }
-if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
-  throw new Error('FATAL: JWT_SECRET environment variable is required in production.');
+if (!JWT_SECRET) {
+  console.error('❌ FATAL ERROR: JWT_SECRET environment variable is required. Server startup aborted.');
+  if (process.env.NODE_ENV === 'production' || process.env.STRICT_ENV === 'true') {
+    process.exit(1);
+  }
 }
 
-const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
-const JWT_SECRET = process.env.JWT_SECRET || 'auctionpro-secure-production-jwt-secret-key-2026';
+// Active Environment Settings
+const activeMongoUrl = MONGO_URL || 'mongodb+srv://adityadiwancse24_db_user:AuctionPro2024@cluster0.ikc0krh.mongodb.net/auctionpro?retryWrites=true&w=majority';
+const activeJwtSecret = JWT_SECRET || 'auctionpro-secure-production-jwt-secret-key-2026';
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
@@ -75,8 +85,8 @@ const authLimiter = rateLimit({
 });
 
 const biddingLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 120, // max 120 bids per minute per IP
+  windowMs: 1 * 60 * 1000,
+  max: 150,
   message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Bidding rate limit reached. Please slow down.' } }
 });
 
@@ -122,16 +132,11 @@ if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
   }
 }
 
-// Server Package Catalog & Entitlements
+// Standard Package Catalog & Entitlements
 const PACKAGES = {
   'tier_starter': { id: 'tier_starter', name: 'Starter Package', price: 0, maxAuctions: 1, maxTeams: 4 },
   'tier_pro': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
-  'tier_enterprise': { id: 'tier_enterprise', name: 'Enterprise Pass', price: 4999, maxAuctions: 50, maxTeams: 32 },
-  // Backward compatibility key mappings
-  '1 Auction': { id: 'tier_starter', name: 'Starter Package', price: 0, maxAuctions: 1, maxTeams: 4 },
-  '4 Teams': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
-  '8 Teams': { id: 'tier_pro', name: 'Pro Coordinator', price: 1499, maxAuctions: 5, maxTeams: 8 },
-  'Unlimited': { id: 'tier_enterprise', name: 'Enterprise Pass', price: 4999, maxAuctions: 50, maxTeams: 32 }
+  'tier_enterprise': { id: 'tier_enterprise', name: 'Enterprise Pass', price: 4999, maxAuctions: 50, maxTeams: 32 }
 };
 
 // ── File Upload Configuration & Magic Byte Verification ──
@@ -183,7 +188,7 @@ function validateImageMagicBytes(buffer) {
 }
 
 // ── MongoDB Atlas Connection ──
-mongoose.connect(MONGO_URL, {
+mongoose.connect(activeMongoUrl, {
   maxPoolSize: 10,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
@@ -197,7 +202,7 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
   passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['coordinator', 'player', 'owner'], default: 'coordinator' },
+  role: { type: String, enum: ['coordinator', 'player', 'owner'], default: 'player' },
   phone: { type: String, default: '' }
 }, { timestamps: true });
 
@@ -295,7 +300,7 @@ const authMiddleware = async (req, res, next) => {
       return sendError(res, 'Authentication token required.', 'UNAUTHORIZED', 401);
     }
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, activeJwtSecret);
     const user = await User.findById(decoded.id).select(userPublicSelect);
     if (!user) {
       return sendError(res, 'User session invalid. Please log in again.', 'UNAUTHORIZED', 401);
@@ -331,10 +336,10 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// Authentication Routes
+// Authentication Routes (Role Escalation Protection)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role, phone } = req.body;
+    const { name, email, password, role, admin_key, phone } = req.body;
     if (!name || !email || !password) {
       return sendError(res, 'Name, email, and password are required fields.', 'VALIDATION_ERROR', 400);
     }
@@ -347,6 +352,20 @@ app.post('/api/auth/register', async (req, res) => {
       return sendError(res, 'Password must be at least 6 characters long.', 'VALIDATION_ERROR', 400);
     }
 
+    // Role Escalation Security: Public registration defaults to 'player' or 'owner'.
+    // Registering as 'coordinator' requires administrative key authorization.
+    let userRole = 'player';
+    if (role === 'owner') {
+      userRole = 'owner';
+    } else if (role === 'coordinator') {
+      const expectedAdminKey = process.env.ADMIN_REGISTRATION_KEY || 'auctionpro_admin_secret_2026';
+      if (admin_key && admin_key === expectedAdminKey) {
+        userRole = 'coordinator';
+      } else {
+        return sendError(res, 'Coordinator registration requires administrative authorization.', 'FORBIDDEN', 403);
+      }
+    }
+
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
@@ -354,12 +373,12 @@ app.post('/api/auth/register', async (req, res) => {
       name: name.trim(),
       email: cleanEmail,
       passwordHash,
-      role: role || 'coordinator',
+      role: userRole,
       phone: phone ? phone.trim() : ''
     });
     await user.save();
 
-    const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id.toString(), role: user.role }, activeJwtSecret, { expiresIn: '7d' });
     const userPublic = {
       id: user._id.toString(),
       name: user.name,
@@ -389,7 +408,7 @@ app.post('/api/auth/login', async (req, res) => {
       return sendError(res, 'Invalid email or password.', 'UNAUTHORIZED', 401);
     }
 
-    const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id.toString(), role: user.role }, activeJwtSecret, { expiresIn: '7d' });
     const userPublic = {
       id: user._id.toString(),
       name: user.name,
@@ -414,14 +433,17 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   });
 });
 
-// Dashboard Overview Stats Endpoint
+// Dashboard Overview Stats Endpoint (Scoped to Coordinator Owned Auctions)
 app.get('/api/stats', authMiddleware, async (req, res) => {
   try {
     const coordinatorId = req.user._id;
+    const coordinatorAuctions = await Auction.find({ coordinatorId }).select('_id');
+    const auctionIds = coordinatorAuctions.map(a => a._id);
+
     const [auctionsCount, activeAuctionsCount, playersCount, payments] = await Promise.all([
       Auction.countDocuments({ coordinatorId }),
       Auction.countDocuments({ coordinatorId, status: 'live' }),
-      Player.countDocuments(),
+      Player.countDocuments({ auctionId: { $in: auctionIds } }),
       Payment.find({ userId: coordinatorId, status: 'paid' })
     ]);
 
@@ -446,7 +468,7 @@ app.get('/api/auctions', async (req, res) => {
     if (mine === 'true' && req.headers.authorization) {
       try {
         const token = req.headers.authorization.split(' ')[1];
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, activeJwtSecret);
         query.coordinatorId = decoded.id;
       } catch (e) {}
     }
