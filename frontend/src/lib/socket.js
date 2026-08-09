@@ -12,8 +12,9 @@
  */
 
 import { io } from 'socket.io-client';
+import { BACKEND } from './api';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || process.env.REACT_APP_SOCKET_URL || process.env.REACT_APP_API_URL || 'https://auctionpro-backend-production.up.railway.app';
+const BACKEND_URL = process.env.REACT_APP_SOCKET_URL || BACKEND;
 
 /** Singleton socket instance — created once, reused everywhere */
 let socketInstance = null;

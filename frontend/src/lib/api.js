@@ -8,7 +8,16 @@
 
 import axios from 'axios';
 
-export const BACKEND = process.env.REACT_APP_BACKEND_URL || process.env.REACT_APP_API_URL || 'https://auctionpro-backend-production.up.railway.app';
+const getBackendUrl = () => {
+  if (process.env.REACT_APP_BACKEND_URL) return process.env.REACT_APP_BACKEND_URL;
+  if (process.env.REACT_APP_API_URL) return process.env.REACT_APP_API_URL;
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    return 'http://localhost:8000';
+  }
+  return 'https://auctionpro-backend-production.up.railway.app';
+};
+
+export const BACKEND = getBackendUrl();
 
 export const api = axios.create({
   baseURL: `${BACKEND}/api`,
@@ -31,7 +40,6 @@ api.interceptors.request.use(
 // Response Interceptor — Unwrap standard envelope & handle auth errors
 api.interceptors.response.use(
   (response) => {
-    // If response comes wrapped in standard envelope { success: true, data: ... }, return data directly
     if (response.data && typeof response.data === 'object' && response.data.success === true && 'data' in response.data) {
       return { ...response, data: response.data.data };
     }
